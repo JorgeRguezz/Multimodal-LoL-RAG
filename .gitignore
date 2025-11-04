@@ -16,3 +16,4 @@ __pycache__/
 # Ignorar virtual environment
 venv_llm/
 venv_smolvlm/
+venv_mixed/
