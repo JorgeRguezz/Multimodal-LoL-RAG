@@ -1,28 +1,29 @@
-from flask import Flask, request, jsonify
+from mcp.server.fastmcp import FastMCP
 from transformers import AutoProcessor, AutoModelForImageTextToText
 from PIL import Image
 import torch
 import io
 import base64
 import os
+import json
 
 # =====================================================
 # Configuración inicial
 # =====================================================
-app = Flask(__name__)
+mcp = FastMCP("vlm_server")
 
 current_device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"------------> Inicializando en dispositivo: {current_device}")
+print(f"------------> VLM Server: Inicializando en dispositivo: {current_device}")
 
 model_path = "HuggingFaceTB/SmolVLM2-256M-Instruct"
 
-print("Cargando modelo...")
+print("VLM Server: Cargando modelo...")
 processor = AutoProcessor.from_pretrained(model_path)
 model = AutoModelForImageTextToText.from_pretrained(
     model_path,
     torch_dtype=torch.bfloat16,
 ).to(current_device)
-print("Modelo cargado correctamente ✅")
+print("VLM Server: Modelo cargado correctamente ✅")
 
 # =====================================================
 # Función de inferencia
@@ -42,23 +43,23 @@ def run_inference(model, processor, messages):
 
 
 # =====================================================
-# Endpoint principal
+# Herramienta MCP
 # =====================================================
-@app.route("/generate", methods=["POST"])
-def generate_text():
+@mcp.tool()
+def analyze_media(payload: dict) -> dict:
     """
-    Espera un JSON con un campo 'conversation'.
-    Puede contener tipos:
-      - {"type": "text", "text": "..."}
-      - {"type": "image", "url": "..."} o {"type": "image", "base64": "..."}
-      - {"type": "video", "path": "..."}
+    Procesa una conversación (texto, imágenes, video) y devuelve una respuesta del VLM.
+    Espera un diccionario con un campo 'conversation'.
     """
     try:
-        data = request.get_json(force=True)
-        conversation = data.get("conversation")
+
+        print("------> tool payload:", payload)
+        print("------> tool payload type:", type(payload))
+
+        conversation = payload.get("conversation")
 
         if not conversation:
-            return jsonify({"error": "Falta el parámetro 'conversation'"}), 400
+            return {"error": "Falta el parámetro 'conversation'"}
 
         # Procesar imágenes base64 (si se envían así)
         for msg in conversation:
@@ -66,28 +67,24 @@ def generate_text():
                 for item in msg["content"]:
                     if item["type"] == "image":
                         if "base64" in item:
-                            # Convertir base64 a imagen PIL
                             image_bytes = base64.b64decode(item["base64"])
                             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                             item["image"] = image
                             del item["base64"]
+                    # The video path is handled by the main chatbot, here we just use the text query
+                    elif item["type"] == "video":
+                        # The model can't process the video directly, it will use the text part of the query
+                        pass
+
 
         # Ejecutar inferencia
         result_text = run_inference(model, processor, conversation)
 
-        return jsonify({"generated_text": result_text})
+        return {"generated_text": result_text}
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# =====================================================
-# Endpoint de salud
-# =====================================================
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "device": current_device})
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    mcp.run(transport='stdio')

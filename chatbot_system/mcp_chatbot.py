@@ -3,7 +3,7 @@ import os
 import asyncio
 import nest_asyncio
 import re
-import requests
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
@@ -57,7 +57,7 @@ class MCP_ChatBot:
         # Sessions dict maps tool/prompt names or resource URIs to MCP client sessions
         self.sessions = {}
 
-    def download_youtube_video(self, url: str, output_dir: str = "downloads") -> str:
+    def download_youtube_video(self, url: str, output_dir: str = "downloads", browser_for_cookies: str = None) -> str:
         import yt_dlp
         os.makedirs(output_dir, exist_ok=True)
         ydl_opts = {
@@ -65,8 +65,11 @@ class MCP_ChatBot:
             'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
             'merge_output_format': 'mp4',
             'quiet': True,
-            'no_warnings': True
+            'no_warnings': True,
         }
+        if browser_for_cookies:
+            ydl_opts['cookies_from_browser'] = (browser_for_cookies,)
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             return os.path.abspath(os.path.join(output_dir, f"{info['title']}.mp4"))
@@ -176,12 +179,11 @@ class MCP_ChatBot:
 
             try:
                 print("[DEBUG] Downloading video...")
-                mp4_path = self.download_youtube_video(youtube_url)
+                mp4_path = self.download_youtube_video(youtube_url, browser_for_cookies="chrome")
                 print(f"[DEBUG] Video downloaded to: {mp4_path}")
                 
-                print("[DEBUG] Analyzing video with VLM API...")
+                print("[DEBUG] Analyzing video with VLM tool...")
                 
-                api_url = "http://localhost:5000/generate"
                 payload = {
                     "conversation": [
                         {
@@ -193,24 +195,43 @@ class MCP_ChatBot:
                         }
                     ]
                 }
-                
-                response = requests.post(api_url, json=payload)
-                response.raise_for_status() # Raise an exception for bad status codes
 
-                vlm_response = response.json().get("generated_text", "Sorry, I could not get a response from the VLM.")
+                session = self.sessions.get("analyze_media")
 
+                print("------> sessions response:", session)
+                print("------> sessions type:", type(session))
+
+                if not session:
+                    return "Error: VLM tool 'analyze_media' not found."
+
+                result = await session.call_tool("analyze_media", arguments={"payload": payload})
+
+                print("Llega hasta result. Result:", result)
                 
-                # CLEAN vlm_response LOGIC
-                vlm_response_parts = vlm_response.split("Assistant:")
-                vlm_response_clean = vlm_response_parts[1].strip()
+                if not isinstance(result.content, list) or not result.content:
+                    raise Exception(f"Unexpected response format from VLM tool: {result.content}")
+
+                # The actual content is a TextContent object inside the list
+                text_content = result.content[0]
                 
-                self.history.append(f"User: {query}")
-                self.history.append(f"Assistant: {vlm_response_clean}")
+                # The JSON string is in the .text attribute of the TextContent object
+                response_dict = json.loads(text_content.text)
+
+                if "error" in response_dict:
+                    raise Exception(response_dict["error"])
+
+                vlm_response = response_dict.get("generated_text", "Sorry, I could not get a response from the VLM.")
+                
+                print("------> VLM response:", vlm_response)
+                print("------> VLM response type:", type(vlm_response))
+
+                print("-"*20)
+                print(f"[DEBUG] VLM response: {vlm_response}")
+                print("-"*20)
+                
+                self.history.append(f"Assistant: {vlm_response}")
                 print(f"[DEBUG] VLM analysis complete.")
-                return vlm_response_clean
-            except requests.exceptions.RequestException as e:
-                print(f"An error occurred during VLM API call: {e}")
-                return f"Sorry, an error occurred while analyzing the video: {e}"
+                return vlm_response
             except Exception as e:
                 print(f"An error occurred during video analysis: {e}")
                 return f"Sorry, an error occurred while analyzing the video: {e}"
@@ -385,9 +406,9 @@ class MCP_ChatBot:
                 
                 response = await self.process_query(query)
 
-                print("-"*20, "HISTORY", "-"*20)
+                print("-"*20, "CONTEXT", "-"*20)
                 print(self.history)
-                print("-"*20, "END OF HISTORY", "-"*20)
+                print("-"*20, "END OF CONTEXT", "-"*20)
                 
                 if response:
                     print(f"Assistant: {response}")
