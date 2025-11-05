@@ -1,0 +1,4 @@
+Flask
+transformers==4.50.0.dev0
+Pillow
+torch

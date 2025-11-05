@@ -3,7 +3,7 @@ import os
 import asyncio
 import nest_asyncio
 import re
-import requests
+import torch
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
@@ -23,6 +23,7 @@ class MCP_ChatBot:
         self.history = []
         self.system_prompt = "You are a helpful assistant."
         self.llm = None
+        self.vlm_processor = None
 
         llm_config = {
             "model_name": "/home/gatv-projects/Desktop/project/llama-3.2-3B-Instruct",
@@ -32,13 +33,19 @@ class MCP_ChatBot:
             "load_format": "safetensors"
         }
 
+        vlm_config = {
+            "model_id": "HuggingFaceTB/SmolVLM2-256M-Instruct"
+        }
+
         self.gpu_manager = GPUModelManager(
-            llm_config=llm_config
+            llm_config=llm_config,
+            vlm_config=vlm_config
         )
         
         try:
-            self.gpu_manager.load_model_to_gpu()
+            self.gpu_manager.load_models_to_gpu()
             self.llm = self.gpu_manager.get_llm()
+            self.vlm_processor = self.gpu_manager.get_vlm_processor()
         except Exception as e:
             print(f"Failed to load models: {e}")
             raise
@@ -56,20 +63,6 @@ class MCP_ChatBot:
         self.available_prompts = []
         # Sessions dict maps tool/prompt names or resource URIs to MCP client sessions
         self.sessions = {}
-
-    def download_youtube_video(self, url: str, output_dir: str = "downloads") -> str:
-        import yt_dlp
-        os.makedirs(output_dir, exist_ok=True)
-        ydl_opts = {
-            'format': 'bestvideo+bestaudio',
-            'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
-            'merge_output_format': 'mp4',
-            'quiet': True,
-            'no_warnings': True
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return os.path.abspath(os.path.join(output_dir, f"{info['title']}.mp4"))
 
     # 2 -> Connects to a single MCP server, lists its tools, prompts, and resources, and stores them.
     async def connect_to_server(self, server_name, server_config):
@@ -176,41 +169,19 @@ class MCP_ChatBot:
 
             try:
                 print("[DEBUG] Downloading video...")
-                mp4_path = self.download_youtube_video(youtube_url)
+                mp4_path = self.vlm_processor.download_youtube_video(youtube_url)
                 print(f"[DEBUG] Video downloaded to: {mp4_path}")
                 
-                print("[DEBUG] Analyzing video with VLM API...")
-                
-                api_url = "http://localhost:5000/generate"
-                payload = {
-                    "conversation": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "video", "path": mp4_path},
-                                {"type": "text", "text": query}
-                            ]
-                        }
-                    ]
-                }
-                
-                response = requests.post(api_url, json=payload)
-                response.raise_for_status() # Raise an exception for bad status codes
-
-                vlm_response = response.json().get("generated_text", "Sorry, I could not get a response from the VLM.")
-
-                
-                # CLEAN vlm_response LOGIC
-                vlm_response_parts = vlm_response.split("Assistant:")
-                vlm_response_clean = vlm_response_parts[1].strip()
-                
-                self.history.append(f"User: {query}")
-                self.history.append(f"Assistant: {vlm_response_clean}")
+                print("[DEBUG] Analyzing video with VLM...")
+                vlm_response = self.vlm_processor.analyze_video(mp4_path, query)
                 print(f"[DEBUG] VLM analysis complete.")
-                return vlm_response_clean
-            except requests.exceptions.RequestException as e:
-                print(f"An error occurred during VLM API call: {e}")
-                return f"Sorry, an error occurred while analyzing the video: {e}"
+                return vlm_response
+            except torch.cuda.OutOfMemoryError:
+                print("GPU out of memory during VLM analysis. Cleaning up.")
+                self.gpu_manager.cleanup()
+                self.llm = None
+                self.vlm_processor = None
+                return "A critical memory error occurred. The models have been unloaded. Please restart the application."
             except Exception as e:
                 print(f"An error occurred during video analysis: {e}")
                 return f"Sorry, an error occurred while analyzing the video: {e}"
@@ -229,7 +200,10 @@ class MCP_ChatBot:
                 return f"Error: Tool '{tool_name}' not found."
 
             try:
-                new_prompt = self.system_prompt + "\n\n" + "\n".join(self.history) + "\nAssistant:"
+                result = await session.call_tool(tool_name, arguments={"query": tool_arg})
+                self.history.append(f"Tool result ({tool_name}): {result.content}")
+
+                new_prompt = "\n".join(self.history) + "\nAssistant:"
                 new_response = self.llm.generate([new_prompt], sampling_params=self.sampling_params)
                 final_output = new_response[0].outputs[0].text.strip()
 
@@ -262,7 +236,7 @@ class MCP_ChatBot:
                 self.history.append(f"Assistant: {output}") # Save the LLM output that contained the call
                 self.history.append(f"Tool result ({tool_name}): {result.content}")
 
-                new_prompt = self.system_prompt + "\n\n" + "\n".join(self.history) + "\nAssistant:"
+                new_prompt = "\n".join(self.history) + "\nAssistant:"
                 new_response = self.llm.generate([new_prompt], sampling_params=self.sampling_params)
                 final_output = new_response[0].outputs[0].text.strip()
 
@@ -384,11 +358,6 @@ class MCP_ChatBot:
                     continue
                 
                 response = await self.process_query(query)
-
-                print("-"*20, "HISTORY", "-"*20)
-                print(self.history)
-                print("-"*20, "END OF HISTORY", "-"*20)
-                
                 if response:
                     print(f"Assistant: {response}")
                     

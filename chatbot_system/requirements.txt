@@ -1,0 +1,8 @@
+torch
+vllm
+nest_asyncio
+requests
+mcp
+python-dotenv
+yt-dlp
+httpx

@@ -10,11 +10,11 @@ from tqdm import tqdm
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("------------> USING DEVICE: ", device)
 # It can be changed to 256M-Instruct, 500M-Instruct or 2.2B-Instruct for more powerful model
-model_id = "HuggingFaceTB/SmolVLM2-256M-Instruct"
+model_id = "HuggingFaceTB/SmolVLM2-500M-Instruct"
 
 model = AutoModelForImageTextToText.from_pretrained(
     model_id,
-    trust_remote_code=True
+    torch_dtype=torch.bfloat16,
 ).to(device)
 processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
 

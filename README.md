@@ -4,7 +4,7 @@ This document provides an overview of the different components of the chatbot sy
 
 ## Set-up
 
-Currently running the system in two different environments. One is for the LLM and its dependecies, the other one is for the VLM. In the future the goal is to find an environment that works for both. Right now, the set up shoul be one environment to run the main script with the LLM and another environment to run the smolvlm2_api.py. The reason of the this is a incompatibility between the transformers library used by the VLM and the vLLM library used by the LLM.
+Currently running the system in two different environments. One is for the LLM and its dependecies, the other one is for the VLM. In the future the goal is to find an environment that works for both. Right now, the set up should be one environment to run the main script with the LLM and another environment to run the smolvlm2_api.py. The reason of this is an incompatibility between the transformers library used by the VLM and the vLLM library used by the LLM.
 
 ## Components
 
