@@ -1,6 +1,7 @@
 import json 
 import os
 import asyncio
+from pathlib import Path
 import nest_asyncio
 import re
 
@@ -9,7 +10,9 @@ from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
 from vllm import LLM, SamplingParams
 from dotenv import load_dotenv
-from gpu_manager import GPUModelManager
+from .gpu_manager import GPUModelManager
+from .knowledge_graph.extractor import VideoKnowledgeExtractor
+from .knowledge_graph._llm import shutdown_local_llm, set_global_llm_instance
 
 
 nest_asyncio.apply()
@@ -27,9 +30,10 @@ class MCP_ChatBot:
         llm_config = {
             "model_name": "/home/gatv-projects/Desktop/project/llama-3.2-3B-Instruct",
             "dtype": "float16",
-            "max_model_len": 4096,
-            "gpu_memory_utilization": 0.35, # 0.35 -> lowest it can go
-            "load_format": "safetensors"
+            "max_model_len": 8192,
+            "gpu_memory_utilization": 0.5,
+            "load_format": "safetensors",
+            "max_num_seqs": 32,
         }
 
         self.gpu_manager = GPUModelManager(
@@ -39,6 +43,7 @@ class MCP_ChatBot:
         try:
             self.gpu_manager.load_model_to_gpu()
             self.llm = self.gpu_manager.get_llm()
+            set_global_llm_instance(self.llm)
         except Exception as e:
             print(f"Failed to load models: {e}")
             raise
@@ -60,9 +65,16 @@ class MCP_ChatBot:
     def download_youtube_video(self, url: str, output_dir: str = "downloads", browser_for_cookies: str = None) -> str:
         import yt_dlp
         os.makedirs(output_dir, exist_ok=True)
+        
+        # Extract info first to get the title, then normalize it
+        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            original_title = info.get('title', 'untitled_video')
+            normalized_title = self._normalize_filename(original_title)
+            
         ydl_opts = {
             'format': 'bestvideo+bestaudio',
-            'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(output_dir, f'{normalized_title}.%(ext)s'), # Use normalized title here
             'merge_output_format': 'mp4',
             'quiet': True,
             'no_warnings': True,
@@ -70,9 +82,38 @@ class MCP_ChatBot:
         if browser_for_cookies:
             ydl_opts['cookies_from_browser'] = (browser_for_cookies,)
 
+        ydl_opts["cookies"] = "/home/gatv-projects/Desktop/project/chatbot_system/cookies.txt" 
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return os.path.abspath(os.path.join(output_dir, f"{info['title']}.mp4"))
+            ydl.download([url]) # Download the video using the new outtmpl
+            return os.path.abspath(os.path.join(output_dir, f"{normalized_title}.mp4"))
+
+    def _normalize_filename(self, filename: str) -> str:
+        """
+        Normalizes a filename by replacing problematic characters with underscores.
+        This helps ensure compatibility across different file systems.
+        """
+        # Define a set of characters that are generally problematic in filenames
+        # This list includes characters invalid on Windows, Unix, and common problematic characters.
+        problematic_chars = r'[<>:"/\\|?*\x00-\x1f! ]' # \x00-\x1f are control characters
+        
+        # Replace problematic characters with an underscore
+        normalized_name = re.sub(problematic_chars, '_', filename)
+        
+        # Replace multiple consecutive underscores with a single underscore
+        normalized_name = re.sub(r'_{2,}', '_', normalized_name)
+        
+        # Strip leading/trailing underscores and whitespace
+        normalized_name = normalized_name.strip(' _')
+        
+        # Ensure the filename is not empty after normalization
+        if not normalized_name:
+            return "untitled_video" # Fallback filename
+        
+
+        print(f"0000000 Normalized filename: {normalized_name}")
+
+        return normalized_name
 
     # 2 -> Connects to a single MCP server, lists its tools, prompts, and resources, and stores them.
     async def connect_to_server(self, server_name, server_config):
@@ -151,7 +192,7 @@ class MCP_ChatBot:
     # 3 -> Reads server configurations from 'server_config.json' and connects to each server.
     async def connect_to_servers(self):
         try:
-            with open("server_config.json", "r") as file:
+            with open(Path(__file__).parent/"server_config.json", "r") as file:
                 data = json.load(file)
             servers = data.get("mcpServers", {})
             for server_name, server_config in servers.items():
@@ -181,51 +222,15 @@ class MCP_ChatBot:
                 print("[DEBUG] Downloading video...")
                 mp4_path = self.download_youtube_video(youtube_url, browser_for_cookies="chrome")
                 print(f"[DEBUG] Video downloaded to: {mp4_path}")
-                
-                print("[DEBUG] Analyzing video with VLM tool...")
-                
-                payload = {
-                    "conversation": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "video", "path": mp4_path},
-                                {"type": "text", "text": query}
-                            ]
-                        }
-                    ]
-                }
 
-                session = self.sessions.get("analyze_media")
+                # Instantiate and run the knowledge extraction pipeline
+                extractor = VideoKnowledgeExtractor(video_path=mp4_path, mcp_sessions=self.sessions)
+                await extractor.run_extraction_pipeline()
 
-                if not session:
-                    return "Error: VLM tool 'analyze_media' not found."
-
-                result = await session.call_tool("analyze_media", arguments={"payload": payload})
-                
-                if not isinstance(result.content, list) or not result.content:
-                    raise Exception(f"Unexpected response format from VLM tool: {result.content}")
-
-                # The actual content is a TextContent object inside the list
-                text_content = result.content[0]
-                
-                # The JSON string is in the .text attribute of the TextContent object
-                response_dict = json.loads(text_content.text)
-
-                if "error" in response_dict:
-                    raise Exception(response_dict["error"])
-
-                vlm_response = response_dict.get("generated_text", "Sorry, I could not get a response from the VLM.")
-
-                vlm_response_parts = vlm_response.split("Assistant:")
-                vlm_response_clean = vlm_response_parts[1].strip()
-                
-                self.history.append(f"Assistant: {vlm_response_clean}")
-                print(f"[DEBUG] VLM analysis complete.")
-                return vlm_response_clean
+                return "video processed!"
             except Exception as e:
-                print(f"An error occurred during video analysis: {e}")
-                return f"Sorry, an error occurred while analyzing the video: {e}"
+                print(f"An error occurred during video knowledge extraction: {e}")
+                return f"Sorry, an error occurred during video processing: {e}"
         else:
             print(f"[DEBUG] No youtube video detected")
 
@@ -409,6 +414,7 @@ class MCP_ChatBot:
     
     # 9 -> Cleans up resources, such as closing the exit stack.
     async def cleanup(self):
+        shutdown_local_llm()
         if self.gpu_manager:
             self.gpu_manager.cleanup()
         await self.exit_stack.aclose()

@@ -1,28 +1,22 @@
-from pathlib import Path
-import torch
 from datetime import datetime
 import os
 import json
-from tqdm import tqdm
-import numpy as np
-from moviepy.video.io.VideoFileClip import VideoFileClip
 from dataclasses import dataclass, field, asdict
 from typing import Type, cast, Callable, List, Optional, Dict, Union
 import asyncio
 import shutil
 
 # MCP Imports
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from contextlib import AsyncExitStack
+from mcp import ClientSession
 
 # Local project imports
-from ._storage import NanoVectorDBVideoSegmentStorage, JsonKVStorage, NanoVectorDBStorage, NetworkXStorage
+from ._storage.kv_json import JsonKVStorage
+from ._storage.vdb_nanovectordb import NanoVectorDBStorage
+from ._storage.gdb_networkx import NetworkXStorage
 from .base import BaseVectorStorage, StorageNameSpace, BaseKVStorage, BaseGraphStorage
-from ._utils import logger, always_get_an_event_loop, limit_async_func_call, wrap_embedding_func_with_attrs
+from ._utils import logger, limit_async_func_call, wrap_embedding_func_with_attrs
 from ._op import chunking_by_video_segments, extract_entities, get_chunks
-from ._llm import LLMConfig, local_llm_config, shutdown_local_llm # Use local_llm_config
-
+from ._llm import LLMConfig, local_llm_config
 
 @dataclass
 class VideoKnowledgeExtractor:
@@ -62,7 +56,7 @@ class VideoKnowledgeExtractor:
 
     def __post_init__(self):
         """Initializes working directory and storage for the client side."""
-        self.working_dir = f"./videorag_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
+        self.working_dir = f"./videorag_cache_{datetime.now().strftime('%Y-%m-%d-%H-%M:%S')}"
         os.makedirs(self.working_dir, exist_ok=True)
         
         self.embedding_func = limit_async_func_call(self.llm.embedding_func_max_async)(wrap_embedding_func_with_attrs(
@@ -248,69 +242,3 @@ class VideoKnowledgeExtractor:
             print("Server cache deleted.")
 
         print("\n✅ Pipeline finished successfully!")
-
-
-async def main():
-    """Main function to set up MCP client and run the extraction."""
-    VIDEO_FILE = "/home/gatv-projects/Desktop/project/downloads/Sisyphus and the Impossible Dream.mp4"
-    
-    try:
-        async with AsyncExitStack() as exit_stack:
-            sessions = {}
-            
-            try:
-                with open(Path(__file__).parent/"server_config.json", "r") as file:
-                    data = json.load(file)
-                servers = data.get("mcpServers", {})
-            except FileNotFoundError:
-                print("Error: `server_config.json` not found. Please create it.")
-                return
-            except Exception as e:
-                print(f"Error loading server_config.json: {e}")
-                return
-
-            vlm_server_config = servers.get('vlm_server')
-            if not vlm_server_config:
-                print("Error: 'vlm_server' not found in server_config.json. Please add it to connect to your media processing server.")
-                return
-
-            try:
-                print("Connecting to Media Processing server via MCP...")
-                server_params = StdioServerParameters(**vlm_server_config)
-                stdio_transport = await exit_stack.enter_async_context(
-                    stdio_client(server_params)
-                )
-                read, write = stdio_transport
-                session = await exit_stack.enter_async_context(
-                    ClientSession(read, write)
-                )
-                await session.initialize()
-                
-                response = await session.list_tools()
-                if not response.tools:
-                    raise RuntimeError("No tools found on the connected MCP server.")
-
-                for tool in response.tools:
-                    print(f"[DIAGNOSTIC] Found tool: {tool.name}")
-                    sessions[tool.name] = session
-                
-                if 'extract_video_knowledge' not in sessions:
-                    raise RuntimeError("Required tool 'extract_video_knowledge' not found on the server.")
-
-                print("Successfully connected to Media Processing server.")
-
-            except Exception as e:
-                print(f"Error connecting to Media Processing server: {e}")
-                return
-
-            # Initialize and run the extractor
-            extractor = VideoKnowledgeExtractor(video_path=VIDEO_FILE, mcp_sessions=sessions)
-            await extractor.run_extraction_pipeline()
-    finally:
-        shutdown_local_llm()
-
-
-if __name__ == '__main__':
-    # To run this script, navigate to the `playground` directory and use:
-    # python -m knowledge_graph_build.test_build_knowledge
-    asyncio.run(main())

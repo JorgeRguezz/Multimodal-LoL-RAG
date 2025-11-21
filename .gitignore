@@ -35,3 +35,9 @@ playground/knowledge_graph_build/graph_legend.html
 _cache
 server_cache_*
 test_data_build_cache_*
+
+
+playground/rag_implementation
+
+cookies.txt
+error.txt
