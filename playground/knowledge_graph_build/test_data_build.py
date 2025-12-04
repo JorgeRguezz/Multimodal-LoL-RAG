@@ -197,7 +197,7 @@ async def main():
         print("Starting data structure build test...")
 
         # Load the data that would normally come from the VLM/ASR server processing
-        with open("knowledge_graph_build/kv_store_video_segments.json", "r") as f:
+        with open("/home/gatv-projects/Desktop/project/knowledge_build_cache_2025-11-28-12:01:53/kv_store_video_segments.json", "r") as f:
             full_data = json.load(f)
         # The extractor expects the full data structure, including the video name key.
         sample_segments_data = full_data

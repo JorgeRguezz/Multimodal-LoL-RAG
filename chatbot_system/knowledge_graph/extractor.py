@@ -56,7 +56,7 @@ class VideoKnowledgeExtractor:
 
     def __post_init__(self):
         """Initializes working directory and storage for the client side."""
-        self.working_dir = f"./videorag_cache_{datetime.now().strftime('%Y-%m-%d-%H-%M:%S')}"
+        self.working_dir = f"./knowledge_build_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
         os.makedirs(self.working_dir, exist_ok=True)
         
         self.embedding_func = limit_async_func_call(self.llm.embedding_func_max_async)(wrap_embedding_func_with_attrs(

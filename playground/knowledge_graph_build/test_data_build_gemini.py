@@ -192,7 +192,7 @@ async def main():
     """Main function to test the data building from a pre-defined JSON."""
     print("Starting data structure build test with Gemini API...")
 
-    with open("knowledge_graph_build/kv_store_video_segments_iphone.json", "r") as f:
+    with open("/home/gatv-projects/Desktop/project/knowledge_build_cache_2025-11-25-10:03:18/kv_store_video_segments.json", "r") as f:
         full_data = json.load(f)
     sample_segments_data = full_data
 

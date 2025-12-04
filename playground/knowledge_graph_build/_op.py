@@ -170,7 +170,7 @@ async def _handle_single_relationship_extraction(
     chunk_key: str,
 ):
     # Ensure it's a relationship record and has at least the first 4 essential fields
-    if record_attributes[0] != '"relationship"' or len(record_attributes) < 4:
+    if len(record_attributes) < 4 or record_attributes[0] != '"relationship"':
         return None
 
     # Extract required fields

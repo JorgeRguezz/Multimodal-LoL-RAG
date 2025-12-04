@@ -93,13 +93,13 @@ gemini_config = LLMConfig(
 
     # LLM for generation
     best_model_func_raw=gemini_1_5_flash_complete,
-    best_model_name="gemini-2.5-pro",    
+    best_model_name="gemini-2.5-flash",    
     best_model_max_token_size=8192, # Check model context window
     best_model_max_async=16,
         
     # Using the same model for both "best" and "cheap" for simplicity
     cheap_model_func_raw=gemini_1_5_flash_complete,
-    cheap_model_name="gemini-2.5-pro",
+    cheap_model_name="gemini-2.5-flash",
     cheap_model_max_token_size=8192,
     cheap_model_max_async=16
 )
