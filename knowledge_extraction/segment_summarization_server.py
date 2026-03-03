@@ -25,7 +25,7 @@ except OSError:
 
 from llama_cpp import Llama
 
-mcp = FastMCP("gpt_oss_server")
+mcp = FastMCP("segment_summarization_server")
 
 # GPT-OSS-20B config (mirrors playground/test_gpt_oss_20b.py)
 OSS_MODEL_ID = "unsloth/gpt-oss-20b-GGUF"

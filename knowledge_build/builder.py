@@ -118,8 +118,40 @@ class KnowledgeBuilder:
             else None
         )
 
-    def _load_artifact(self, filename: str) -> Optional[dict]:
-        path = os.path.join(self.extraction_dir, filename)
+    def _resolve_artifact_dir(self) -> str:
+        # Required layout: extraction_dir/extracted_data/<video_name>/kv_store_*.json
+        extracted_data_root = os.path.join(self.extraction_dir, "extracted_data")
+        if not os.path.isdir(extracted_data_root):
+            raise FileNotFoundError(
+                f"Could not find extraction artifacts directory: {extracted_data_root}"
+            )
+
+        video_dirs = [
+            entry.path for entry in os.scandir(extracted_data_root) if entry.is_dir()
+        ]
+        if not video_dirs:
+            raise FileNotFoundError(
+                f"No video directories found in extracted_data: {extracted_data_root}"
+            )
+
+        candidate_dirs = [
+            path
+            for path in video_dirs
+            if os.path.exists(os.path.join(path, VIDEO_SEGMENTS_FILENAME))
+        ]
+        if not candidate_dirs:
+            raise FileNotFoundError(
+                f"No artifact directory contains {VIDEO_SEGMENTS_FILENAME} under {extracted_data_root}"
+            )
+
+        if len(candidate_dirs) > 1:
+            logger.warning(
+                "Multiple extracted_data video folders found; selecting most recently modified one."
+            )
+        return max(candidate_dirs, key=os.path.getmtime)
+
+    def _load_artifact(self, artifact_dir: str, filename: str) -> Optional[dict]:
+        path = os.path.join(artifact_dir, filename)
         if not os.path.exists(path):
             logger.warning(f"Artifact not found: {path}")
             return None
@@ -130,14 +162,17 @@ class KnowledgeBuilder:
         if not os.path.isdir(self.extraction_dir):
             raise FileNotFoundError(f"Extraction dir not found: {self.extraction_dir}")
 
-        segments_data = self._load_artifact(VIDEO_SEGMENTS_FILENAME)
+        artifact_dir = self._resolve_artifact_dir()
+        logger.info(f"Using artifact dir: {artifact_dir}")
+
+        segments_data = self._load_artifact(artifact_dir, VIDEO_SEGMENTS_FILENAME)
         if not segments_data:
             raise FileNotFoundError(
-                f"Missing required artifact: {VIDEO_SEGMENTS_FILENAME} in {self.extraction_dir}"
+                f"Missing required artifact: {VIDEO_SEGMENTS_FILENAME} in {artifact_dir}"
             )
 
-        frames_data = self._load_artifact(VIDEO_FRAMES_FILENAME)
-        paths_data = self._load_artifact(VIDEO_PATHS_FILENAME)
+        frames_data = self._load_artifact(artifact_dir, VIDEO_FRAMES_FILENAME)
+        paths_data = self._load_artifact(artifact_dir, VIDEO_PATHS_FILENAME)
 
         await self.video_segments.upsert(segments_data)
         if frames_data:

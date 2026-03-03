@@ -57,5 +57,6 @@ frame_*.png
 
 /playground/qwen2.5-vl-7b
 
+/knowledge_extraction/cache/*
 
 vlm_context_test_cache

@@ -3,6 +3,7 @@ The main orchestration script that manages the video processing pipeline,
 coordinating video splitting and tool calls to the MCP servers.
 """
 import asyncio
+import argparse
 import os
 import sys
 import json
@@ -25,18 +26,35 @@ from knowledge_graph_build._videoutil.split import split_video
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-async def run_pipeline():
-    start_total = time.time()
-    # 1. Setup workspace
-    if os.path.exists(WORKING_DIR):
-        shutil.rmtree(WORKING_DIR)
+def _prepare_workspace_for_video(video_path: str) -> None:
     os.makedirs(WORKING_DIR, exist_ok=True)
+    video_basename = os.path.splitext(os.path.basename(video_path))[0]
+
+    # Keep extracted_data across runs; clean only transient artifacts.
+    transient_cache_dir = os.path.join(WORKING_DIR, "_cache", video_basename)
+    if os.path.isdir(transient_cache_dir):
+        shutil.rmtree(transient_cache_dir)
+
+    for entry in os.scandir(WORKING_DIR):
+        if entry.is_file() and entry.name.startswith("frame_s") and entry.name.endswith(".png"):
+            os.remove(entry.path)
+
+
+async def run_pipeline(video_path: str = VIDEO_PATH):
+    start_total = time.time()
+    video_path = os.path.abspath(video_path)
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    # 1. Setup workspace for this video only
+    _prepare_workspace_for_video(video_path)
 
     # 2. Split Video
     print("\n[Step 1] Splitting Video...")
+    print(f" >> Video: {video_path}")
     start_split = time.time()
     segment_index2name, segment_times_info = split_video(
-        video_path=VIDEO_PATH,
+        video_path=video_path,
         working_dir=WORKING_DIR,
         segment_length=SEGMENT_LENGTH,
         num_frames_per_segment=FRAMES_PER_SEGMENT,
@@ -74,11 +92,9 @@ async def run_pipeline():
     
     # 3.1 Pre-extract frames to avoid moviepy contention
     tasks = []
-    with VideoFileClip(VIDEO_PATH) as video:
+    with VideoFileClip(video_path) as video:
         sorted_indices = sorted(segment_index2name.keys(), key=lambda x: int(x))
         for index in sorted_indices:
-            if int(index) >= MAX_SEGMENTS: break
-            
             segment_name = segment_index2name[index]
             timestamps = segment_times_info[index]["frame_times"]
             
@@ -206,12 +222,11 @@ async def run_pipeline():
             
             # Transcribe segments
             transcripts = {}
-            video_basename = os.path.basename(VIDEO_PATH).split('.')[0]
+            video_basename = os.path.splitext(os.path.basename(video_path))[0]
             cache_path = os.path.join(WORKING_DIR, '_cache', video_basename)
             
             print(" >> Running ASR...")
             for index in segment_index2name:
-                if int(index) >= MAX_SEGMENTS: break
                 audio_path = os.path.join(cache_path, f"{segment_index2name[index]}.mp3")
                 if os.path.exists(audio_path):
                     s_asr = time.time()
@@ -277,7 +292,7 @@ async def run_pipeline():
     print("\n[Step 4] Saving extraction artifacts...")
     gpt_params = StdioServerParameters(
         command=os.path.join(project_root, "venv_gpt/bin/python3"),
-        args=["-m", "knowledge_extraction.gpt_oss_server"],
+        args=["-m", "knowledge_extraction.segment_summarization_server"],
     )
     gpt_session = None
     gpt_times = []
@@ -287,8 +302,6 @@ async def run_pipeline():
             await gpt_session.initialize()
             segments_information = {}
             for index in segment_index2name:
-                if int(index) >= MAX_SEGMENTS:
-                    break
                 segment_name = segment_index2name[index]
                 captions = segments_captions.get(index, [])
                 llm_start_time = time.time()
@@ -311,13 +324,16 @@ async def run_pipeline():
     gpt_total_time = gpt_total_end - gpt_total_start
 
     segments_data = {video_basename: segments_information}
-    paths_data = {video_basename: VIDEO_PATH}
+    paths_data = {video_basename: video_path}
 
-    with open(os.path.join(WORKING_DIR, "kv_store_video_segments.json"), "w", encoding="utf-8") as f:
+    extracted_data_dir = os.path.join(WORKING_DIR, "extracted_data", video_basename)
+    os.makedirs(extracted_data_dir, exist_ok=True)
+
+    with open(os.path.join(extracted_data_dir, "kv_store_video_segments.json"), "w", encoding="utf-8") as f:
         json.dump(segments_data, f, indent=2, ensure_ascii=False)
-    with open(os.path.join(WORKING_DIR, "kv_store_video_frames.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(extracted_data_dir, "kv_store_video_frames.json"), "w", encoding="utf-8") as f:
         json.dump(frames_data, f, indent=2, ensure_ascii=False)
-    with open(os.path.join(WORKING_DIR, "kv_store_video_path.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(extracted_data_dir, "kv_store_video_path.json"), "w", encoding="utf-8") as f:
         json.dump(paths_data, f, indent=2, ensure_ascii=False)
 
     # Summary
@@ -339,4 +355,11 @@ async def run_pipeline():
     print("="*50)
 
 if __name__ == "__main__":
-    asyncio.run(run_pipeline())
+    parser = argparse.ArgumentParser(description="Run knowledge extraction pipeline for one video.")
+    parser.add_argument(
+        "--video-path",
+        default=VIDEO_PATH,
+        help="Absolute or relative path to the input video file.",
+    )
+    args = parser.parse_args()
+    asyncio.run(run_pipeline(video_path=args.video_path))
