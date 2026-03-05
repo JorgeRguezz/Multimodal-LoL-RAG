@@ -277,19 +277,23 @@ async def oss_llm_batch_generate(prompts: list[str]) -> list[str]:
     loop = asyncio.get_running_loop()
 
     def generate_one(prompt: str) -> str:
+
+        system_prompt = ""
+
         full_prompt = (
-            "<s><|begin_system|>\n"
-            "You are a helpful assistant.\n"
-            "<|begin_user|>\n"
+            "<|start|>system<|message|>\n"
+            f"{system_prompt}\n"
+            "<|end|><|start|>user<|message|>\n"
             f"{prompt}\n"
-            "<|begin_assistant|>\n"
+            "<|end|><|start|>assistant<|message|>\n"
         )
         output = llm(
             full_prompt,
             max_tokens=10000,
-            temperature=0.7,
-            top_p=0.9,
-            stop=["User:"],
+            temperature=1.0,
+            top_p=1.0,
+            top_k=0
+            # stop=["User:"],
         )
         return output["choices"][0]["text"].strip()
 

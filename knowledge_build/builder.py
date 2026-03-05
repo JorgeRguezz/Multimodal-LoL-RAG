@@ -5,7 +5,7 @@ import json
 import asyncio
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import Type, Dict, Optional
+from typing import Type, Dict, Optional, Callable, List, Union
 
 if __package__ in (None, ""):
     import sys
@@ -46,7 +46,9 @@ class KnowledgeBuilder:
     enable_llm_cache: bool = True
 
     # text chunking
-    chunk_func = chunking_by_video_segments
+    chunk_func: Callable[..., List[Dict[str, Union[str, int]]]] = field(
+        default=chunking_by_video_segments
+    )
     chunk_token_size: int = 1200
 
     # storage
@@ -61,9 +63,15 @@ class KnowledgeBuilder:
 
     # internal state
     video_segment_feature_vdb: BaseVectorStorage = field(init=False, repr=False, default=None)
+    artifact_dir: str = field(init=False)
+    source_video_name: str = field(init=False)
 
     def __post_init__(self):
-        self.working_dir = f"./knowledge_build_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
+        self.artifact_dir = self._resolve_artifact_dir()
+        self.source_video_name = os.path.basename(self.artifact_dir)
+        self.working_dir = os.path.join(
+            self._project_root(), f"knowledge_build_cache_{self.source_video_name}"
+        )
         os.makedirs(self.working_dir, exist_ok=True)
 
         self.embedding_func = limit_async_func_call(self.llm.embedding_func_max_async)(
@@ -118,6 +126,9 @@ class KnowledgeBuilder:
             else None
         )
 
+    def _project_root(self) -> str:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     def _resolve_artifact_dir(self) -> str:
         # Required layout: extraction_dir/extracted_data/<video_name>/kv_store_*.json
         extracted_data_root = os.path.join(self.extraction_dir, "extracted_data")
@@ -144,11 +155,26 @@ class KnowledgeBuilder:
                 f"No artifact directory contains {VIDEO_SEGMENTS_FILENAME} under {extracted_data_root}"
             )
 
+        # Build outputs are named as knowledge_build_cache_<video_folder_name>.
+        project_root = self._project_root()
+        unbuilt_dirs = [
+            path
+            for path in sorted(candidate_dirs)
+            if not os.path.exists(
+                os.path.join(project_root, f"knowledge_build_cache_{os.path.basename(path)}")
+            )
+        ]
+
+        if not unbuilt_dirs:
+            raise FileNotFoundError(
+                "No unbuilt extraction folders found. All extracted_data folders already have matching knowledge_build_cache_<video_name> outputs."
+            )
+
         if len(candidate_dirs) > 1:
             logger.warning(
-                "Multiple extracted_data video folders found; selecting most recently modified one."
+                f"Multiple extracted_data folders found; selected next unbuilt folder: {os.path.basename(unbuilt_dirs[0])}"
             )
-        return max(candidate_dirs, key=os.path.getmtime)
+        return unbuilt_dirs[0]
 
     def _load_artifact(self, artifact_dir: str, filename: str) -> Optional[dict]:
         path = os.path.join(artifact_dir, filename)
@@ -162,8 +188,9 @@ class KnowledgeBuilder:
         if not os.path.isdir(self.extraction_dir):
             raise FileNotFoundError(f"Extraction dir not found: {self.extraction_dir}")
 
-        artifact_dir = self._resolve_artifact_dir()
+        artifact_dir = self.artifact_dir
         logger.info(f"Using artifact dir: {artifact_dir}")
+        logger.info(f"Using build output dir: {self.working_dir}")
 
         segments_data = self._load_artifact(artifact_dir, VIDEO_SEGMENTS_FILENAME)
         if not segments_data:
@@ -264,6 +291,8 @@ def main():
     extraction_dir = _default_extraction_dir()
     print(f"Using extraction_dir: {extraction_dir}")
     builder = KnowledgeBuilder(extraction_dir=extraction_dir)
+    print(f"Selected artifact_dir: {builder.artifact_dir}")
+    print(f"Build output dir: {builder.working_dir}")
     asyncio.run(builder.build())
 
 

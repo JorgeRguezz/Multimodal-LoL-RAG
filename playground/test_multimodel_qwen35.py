@@ -4,11 +4,10 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 import time
 import json
-import re
 
 # 1. Download the quantized GGUF model
-model_repo = "unsloth/GLM-4.7-Flash-GGUF"
-model_filename = "GLM-4.7-Flash-UD-Q5_K_XL.gguf"
+model_repo = "unsloth/Qwen3.5-27B-GGUF"
+model_filename = "Qwen3.5-27B-GGUF-Q8_0.gguf"
 
 local_model_dir = "/media/gatv-projects/ssd/AI_models" 
 
@@ -27,18 +26,10 @@ print("Loading model into GPU...")
 llm = Llama(
     model_path = model_path,
     n_ctx = 16384,
-    n_gpu_layers = -1,  # Offload all layers to GPU
+    n_gpu_layers = None, # TODO
     verbose = False, # llama-cpp-python will print only loading info; set to True for more detailed logs
-    
-    #improving speed
-    n_batch=2048,
-    n_ubatch=512,
-    f16_kv=True,
-    n_threads=max(1, os.cpu_count() //2),  # Use half of available CPU cores for inference threads
-    n_threads_batch=max(1, os.cpu_count() //2)  # Use a quarter of available CPU cores for batch processing threads
+    n_batch=2048
 )
-
-pattern = re.compile(r"</think>")
 
 knowledge_path = "/home/gatv-projects/Desktop/project/knowledge_extraction/cache/extracted_data/S+_BUFFED_AHRI_MID_IS_GOD_TIER_Best_Build_&_Runes_How_to_Carry_with_Ahri_League_of_Legends/kv_store_video_frames.json"
 
@@ -54,15 +45,14 @@ for video in knowledge_json.values():
 # 2. Define static variables OUTSIDE the loop for better performance
 system_prompt = """
     You are an expert on summarizing League of Legends gameplay based on visual descriptions.
-    Given the VLM outputs describing the visual content of consecutive video segments, your task is to generate a description of the key events and actions.
-    Focus on identifying the main champion(s) involved, their actions, and any significant interactions as well as gameplay events or game situations.
+    Given the VLM outputs describing the visual content of consecutive video segments, your task is to generate a concise summary of the key events and actions.
+    Focus on identifying the main champion(s) involved, their actions, and any significant interactions.
     Use the VLM output as your primary source of information, and infer the most likely gameplay events based on the visual cues provided. Your summary should be clear, informative, and capture the essence of the gameplay.
 """
 
 chunk_size = 5
 batch_number = 0
 total_time = 0
-total_tps = 0
 
 # 3. Iterate through the list in chunks of 4 using Python slicing
 for i in range(0, len(all_segments), chunk_size):
@@ -99,53 +89,16 @@ for i in range(0, len(all_segments), chunk_size):
     start_inference = time.time()
     reponse = llm.create_chat_completion(
         messages = messages,
-        temperature=1.0,
-        top_p = 0.95,
+        temperature=0.7,
+        top_p = 1.0,
+        min_p = 0.01,
         repeat_penalty = 1.0,
         max_tokens = 8000
     )
     end_inference = time.time()
-    elapsed = end_inference - start_inference
-
-    #tokens accounting (llama-cpp-python provides this)
-    usage = reponse.get("usage", {})
-    prompt_tokens = usage.get("prompt_tokens", None)
-    completion_tokens = usage.get("completion_tokens", None)
-    total_tokens = usage.get("total_tokens", None)
-
-    tps = (completion_tokens / elapsed) if (elapsed > 0 and completion_tokens is not None) else float("inf")
-    
-    print(f"Batch {batch_number} inference time: {elapsed:.2f} seconds")
-    if completion_tokens is not None:
-        print(f"Batch {batch_number} tokens: prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
-        print(f"Batch {batch_number} speed: {tps:.2f} tokens/sec")
-        total_tps += tps
-
-    print("\n=== Generated Response ===")
-
-        # 5. Use the pre-compiled regex pattern
-    clean_output = reponse["choices"][0]["message"]["content"].strip()
-    if pattern.search(clean_output):
-        response = pattern.split(clean_output, maxsplit=1)
-        thought_process = response[0].strip()
-        answer = response[1].strip()
-        print("="*20, f" Final Response of batch {batch_number} ", "="*20)
-        print(">>>>>>>>>> THOUGHT PROCESS <<<<<<<<<<")
-        print(thought_process)
-        print(">>>>>>>>>> ANSWER <<<<<<<<<<")
-        print(answer)
-        print("="*60)
-    else:
-        print(f"============== MALFORMED OUTPUT of batch {batch_number} ==============")
-        print("="*10, "RAW MODEL RESPONSE", "="*10)
-        print(clean_output) # Printed clean_output instead of the whole dict for readability
-        print("="*30)
 
     batch_number += 1
-    total_time += elapsed
-    total_tps += tps
 
-average_time = total_time / batch_number if batch_number > 0 else 0
-average_tps = total_tps / batch_number if batch_number > 0 else 0
-print(f"Average inference time for all batches: {average_time:.2f} seconds")
-print(f"Average tokens/sec for all batches: {average_tps:.2f} tokens/sec")
+    print(f"Inference time: {end_inference - start_inference:.2f} seconds")
+    print("\n=== Generated Response ===")
+    print(reponse["choices"][0]["message"]["content"])
