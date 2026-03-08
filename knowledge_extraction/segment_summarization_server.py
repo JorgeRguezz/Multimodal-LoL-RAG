@@ -6,6 +6,7 @@ import time
 import re
 import ctypes
 from typing import List
+import sys
 
 import torch
 from huggingface_hub import snapshot_download
@@ -29,7 +30,7 @@ mcp = FastMCP("segment_summarization_server")
 
 # GPT-OSS-20B config (mirrors playground/test_gpt_oss_20b.py)
 OSS_MODEL_ID = "unsloth/gpt-oss-20b-GGUF"
-OSS_QUANT_FILE = "gpt-oss-20b-Q4_K_M.gguf"
+OSS_QUANT_FILE = "gpt-oss-20b-F16.gguf"
 OSS_LOCAL_DIR = "./gpt-oss-20b"
 OSS_N_GPU_LAYERS = -1
 OSS_N_CTX = 20000
@@ -60,14 +61,20 @@ def get_llm():
 
 
 SYSTEM_PROMPT = """
-You are an expert on summarizing League of Legends gameplay based on visual descriptions.
-Given the VLM outputs describing the visual content of consecutive video segments, your task is to generate a concise summary of the key events and actions.
-Focus on identifying the main champion(s) involved, their actions, and any significant interactions.
-Use the VLM output as your primary source of information, and infer the most likely gameplay events based on the visual cues provided. Your summary should be clear, informative, and capture the essence of the gameplay.
+    You are an expert on summarizing League of Legends gameplay based on visual descriptions.
+
+    Reasoning: medium
+
+    Given the VLM outputs describing the visual content of consecutive video segments, your task is to generate a description of the key events and actions.
+    Focus on identifying the main champion(s) involved, their actions, and any significant interactions as well as gameplay events or game situations.
+    Use the VLM output as your primary source of information, and infer the most likely gameplay events based on the visual cues provided. Your summary should be clear, informative, and capture the essence of the gameplay.
+    
+    <|channel|>analysis<|message|>User asks: "What is 2 + 2?" Simple arithmetic. Provide answer.<|end|>
+    <|start|>assistant<|channel|>final<|message|>2 + 2 = 4.<|return|>
 """
 
 # Same cleanup pattern as playground/test_gpt_oss_20b.py
-_CLEAN_PATTERN = re.compile(r"<\|end\|><\|start\|>assistant<\|channel\|>final(?:<\|message\|>|\|assistant_output\|?|>| <\|constrain\|><\|assistant\|>)")
+_CLEAN_PATTERN = re.compile(r"final<\|message\|>")
 
 @mcp.tool()
 async def summarize_segment_captions(captions: List[str]) -> str:
@@ -83,26 +90,26 @@ async def summarize_segment_captions(captions: List[str]) -> str:
     {merged_content}
     """
 
-    full_prompt = f"""<s><|begin_system|>
-    {SYSTEM_PROMPT}
-    <|begin_user|>
-    {prompt}
-    <|begin_assistant|>
-    """
+    full_prompt = f"""<|start|>system<|message|>{SYSTEM_PROMPT}<|end|><|start|>user<|message|>{prompt}<|end|>"""
 
     start = time.time()
     output = llm(
         full_prompt,
-        max_tokens=10000,
-        temperature=0.7,
-        top_p=0.9,
-        stop=["User:"],
+        max_tokens=2500,
+        temperature=0.1,
+        top_p=1.0,
+        top_k=0,
+        # stop=["User:"],
     )
     _ = time.time() - start
     clean_output = output["choices"][0]["text"].strip()
     if _CLEAN_PATTERN.search(clean_output):
         response = _CLEAN_PATTERN.split(clean_output, maxsplit=1)
+        print("[DEBUG]" ,"="*10, "Summary output", "="*10, file=sys.stderr)
+        print(response[1].strip(), file=sys.stderr)
         return response[1].strip() if len(response) > 1 else clean_output
+    print("[DEBUG]" ,"="*10, "Malformed Summary", "="*10, file=sys.stderr)
+    print(clean_output, file=sys.stderr)
     return clean_output
 
 

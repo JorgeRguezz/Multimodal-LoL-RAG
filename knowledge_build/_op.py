@@ -140,7 +140,12 @@ async def _handle_entity_relation_summary(
     )
     use_prompt = prompt_template.format(**context_base)
     logger.debug(f"Trigger summary: {entity_or_relation_name}")
-    summary = await use_llm_func(use_prompt, max_tokens=summary_max_tokens, hashing_kv=llm_response_cache)
+    summary = await use_llm_func(
+        use_prompt,
+        system_prompt=PROMPTS["system_prompt_kg_summary"],
+        max_tokens=summary_max_tokens,
+        hashing_kv=llm_response_cache,
+    )
     return summary
 
 
@@ -297,81 +302,233 @@ async def _merge_edges_then_upsert(
     return return_edge_data
 
 
-from ._llm import local_llm_batch_generate, oss_llm_batch_generate, OSS_MODEL_ID
+from ._llm import oss_llm_batch_generate
 
 
-async def extract_entities(chunks: dict[str, TextChunkSchema], knowledge_graph_inst: BaseGraphStorage, entity_vdb: BaseVectorStorage, global_config: dict) -> Union[BaseGraphStorage, None]:
+def _split_extraction_records(text: str, context_base: dict) -> list[list[str]]:
+    records = split_string_by_multi_markers(
+        text,
+        [context_base["record_delimiter"], context_base["completion_delimiter"]],
+    )
+    parsed_records = []
+    for record in records:
+        record_match = re.search(r"\((.*)\)", record)
+        if record_match is None:
+            continue
+        parsed_records.append(
+            split_string_by_multi_markers(
+                record_match.group(1),
+                [context_base["tuple_delimiter"]],
+            )
+        )
+    return parsed_records
+
+
+def _normalize_entity_type(entity_type: str, allowed_types: set[str]) -> str:
+    normalized = clean_str(entity_type.upper())
+    return normalized if normalized in allowed_types else "UNKNOWN"
+
+
+def _sanitize_relationship_weight(weight: float, minimum: float = 1.0, maximum: float = 10.0) -> float:
+    if weight < minimum:
+        return minimum
+    if weight > maximum:
+        return maximum
+    return weight
+
+
+async def _extract_entities_from_text(
+    chunk_key: str,
+    raw_text: str,
+    context_base: dict,
+    allowed_types: set[str],
+) -> list[dict]:
+    parsed = _split_extraction_records(raw_text, context_base)
+    chunk_entities = []
+    seen_names = set()
+    for attributes in parsed:
+        entity_data = await _handle_single_entity_extraction(attributes, chunk_key)
+        if not entity_data:
+            continue
+        entity_data["entity_type"] = _normalize_entity_type(entity_data["entity_type"], allowed_types)
+        if entity_data["entity_name"] in seen_names:
+            continue
+        if not entity_data["description"].strip():
+            continue
+        seen_names.add(entity_data["entity_name"])
+        chunk_entities.append(entity_data)
+    return chunk_entities
+
+
+async def _extract_relationships_from_text(
+    chunk_key: str,
+    raw_text: str,
+    context_base: dict,
+    valid_entities: set[str],
+    min_weight: float = 1.0,
+    max_weight: float = 10.0,
+) -> list[dict]:
+    parsed = _split_extraction_records(raw_text, context_base)
+    chunk_relationships = []
+    seen_pairs = set()
+    for attributes in parsed:
+        relation_data = await _handle_single_relationship_extraction(attributes, chunk_key)
+        if not relation_data:
+            continue
+        src = relation_data["src_id"]
+        tgt = relation_data["tgt_id"]
+        if src == tgt:
+            continue
+        if src not in valid_entities or tgt not in valid_entities:
+            continue
+        relation_data["weight"] = _sanitize_relationship_weight(
+            relation_data["weight"], minimum=min_weight, maximum=max_weight
+        )
+        if not relation_data["description"].strip():
+            continue
+        undirected_key = tuple(sorted((src, tgt)))
+        if undirected_key in seen_pairs:
+            continue
+        seen_pairs.add(undirected_key)
+        chunk_relationships.append(relation_data)
+    return chunk_relationships
+
+
+async def extract_entities(
+    chunks: dict[str, TextChunkSchema],
+    knowledge_graph_inst: BaseGraphStorage,
+    entity_vdb: BaseVectorStorage,
+    global_config: dict,
+) -> Union[BaseGraphStorage, None]:
     """
-    Extracts entities and relationships from text chunks using a batched approach.
-    This function is refactored to collect all prompts and send them to the LLM
-    in a single, efficient batch call, avoiding concurrency issues with local models.
+    Simple-only KG extraction:
+    1) Base extraction of entities + relationships per chunk.
+    2) Unified glean passes for missing tuples.
     """
-    model_name = global_config["llm"]["cheap_model_name"]
-    
+    use_llm_func: callable = global_config["llm"]["best_model_func"]
+    llm_response_cache = global_config.get("llm_response_cache")
+    max_gleaning = int(global_config.get("entity_extract_max_gleaning", 1))
+    min_weight = 1.0
+    max_weight = 10.0
+
     ordered_chunks = list(chunks.items())
-
-    # 1. Prepare prompts for all chunks
-    entity_extract_prompt_template = PROMPTS["entity_extraction"]
     context_base = dict(
         tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
         record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
         completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
         entity_types=",".join(PROMPTS["DEFAULT_ENTITY_TYPES"]),
     )
-    
-    all_prompts = [
-        entity_extract_prompt_template.format(**context_base, input_text=chunk_dp["content"])
-        for _, chunk_dp in ordered_chunks
-    ]
+    allowed_types = {t.upper() for t in PROMPTS["DEFAULT_ENTITY_TYPES"]}
 
-    # 2. Make a single batched call to the LLM
-    logger.info(f"Sending a batch of {len(all_prompts)} prompts to the LLM for entity extraction...")
-    if model_name == OSS_MODEL_ID:
-        all_llm_results = await oss_llm_batch_generate(all_prompts)
-    else:
-        all_llm_results = await local_llm_batch_generate(model_name, all_prompts)
-    logger.info("Batch processing complete.")
-
-    # 3. Process the results
+    logger.info("--- Simple Mode: Base Graph Extraction + Unified Glean ---")
     maybe_nodes = defaultdict(list)
     maybe_edges = defaultdict(list)
 
-    for (chunk_key, _), final_result in zip(ordered_chunks, all_llm_results):
-        logger.info(f"LLM Output for chunk {chunk_key}:\n{final_result}\n---")
-        records = split_string_by_multi_markers(
-            final_result,
-            [context_base["record_delimiter"], context_base["completion_delimiter"]],
+    simple_prompt_template = PROMPTS["kg_simple_graph_extraction_template"]
+    simple_prompts = [
+        simple_prompt_template.format(input_text=chunk_dp["content"], **context_base)
+        for _, chunk_dp in ordered_chunks
+    ]
+    raw_simple_results = await oss_llm_batch_generate(
+        simple_prompts,
+        system_prompt=PROMPTS["system_prompt_kg_glean_unified"],
+        max_tokens=3000,
+    )
+
+    for (chunk_key, _), prompt, result in zip(ordered_chunks, simple_prompts, raw_simple_results):
+        logger.info(f"Simple extraction output for chunk {chunk_key}:\n{result}\n---")
+        chunk_entities = await _extract_entities_from_text(
+            chunk_key=chunk_key,
+            raw_text=result,
+            context_base=context_base,
+            allowed_types=allowed_types,
         )
+        existing_names = {e["entity_name"] for e in chunk_entities}
+        valid_entities = set(existing_names)
 
-        for record in records:
-            record_match = re.search(r"\((.*)\)", record)
-            if record_match is None:
-                continue
-            
-            record_content = record_match.group(1)
-            record_attributes = split_string_by_multi_markers(
-                record_content, [context_base["tuple_delimiter"]]
+        chunk_relationships = await _extract_relationships_from_text(
+            chunk_key=chunk_key,
+            raw_text=result,
+            context_base=context_base,
+            valid_entities=valid_entities,
+            min_weight=min_weight,
+            max_weight=max_weight,
+        )
+        existing_pairs = {tuple(sorted((r["src_id"], r["tgt_id"]))) for r in chunk_relationships}
+
+        history = pack_user_ass_to_openai_messages(prompt, result)
+        chunk_text = chunks[chunk_key]["content"]
+        for _ in range(max_gleaning):
+            entity_snapshot = "\n".join(
+                [f'- "{e["entity_name"]}" ({e["entity_type"]}): {e["description"]}' for e in chunk_entities]
             )
-
-            if_entities = await _handle_single_entity_extraction(
-                record_attributes, chunk_key
+            relation_snapshot = "\n".join(
+                [f'- "{r["src_id"]}" -> "{r["tgt_id"]}" (w={r["weight"]}): {r["description"]}' for r in chunk_relationships]
             )
-            if if_entities is not None:
-                maybe_nodes[if_entities["entity_name"]].append(if_entities)
-                continue
-
-            if_relation = await _handle_single_relationship_extraction(
-                record_attributes, chunk_key
+            unified_prompt = PROMPTS["kg_unified_glean_template"].format(
+                entity_types=context_base["entity_types"],
+                entity_snapshot=(entity_snapshot if entity_snapshot else "None"),
+                relation_snapshot=(relation_snapshot if relation_snapshot else "None"),
+                chunk_text=chunk_text,
+                tuple_delimiter=context_base["tuple_delimiter"],
+                record_delimiter=context_base["record_delimiter"],
+                completion_delimiter=context_base["completion_delimiter"],
             )
-            if if_relation is not None:
-                # Ensure undirected graph by sorting the tuple
-                maybe_edges[tuple(sorted((if_relation["src_id"], if_relation["tgt_id"])))].append(
-                    if_relation
-                )
+            unified_result = await use_llm_func(
+                unified_prompt,
+                system_prompt=PROMPTS["system_prompt_kg_glean_unified"],
+                history_messages=history,
+                max_tokens=3000,
+                hashing_kv=llm_response_cache,
+            )
+            history += pack_user_ass_to_openai_messages(unified_prompt, unified_result)
 
-    # 4. Merge and upsert nodes and edges (same as before)
-    logger.info(f"Extracted {len(maybe_nodes)} unique entities and {len(maybe_edges)} unique relationships.")
-    
+            gleaned_entities = await _extract_entities_from_text(
+                chunk_key=chunk_key,
+                raw_text=unified_result,
+                context_base=context_base,
+                allowed_types=allowed_types,
+            )
+            net_new_entities = []
+            for ent in gleaned_entities:
+                if ent["entity_name"] in existing_names:
+                    continue
+                existing_names.add(ent["entity_name"])
+                net_new_entities.append(ent)
+            if net_new_entities:
+                chunk_entities.extend(net_new_entities)
+
+            valid_entities = {e["entity_name"] for e in chunk_entities}
+            gleaned_relations = await _extract_relationships_from_text(
+                chunk_key=chunk_key,
+                raw_text=unified_result,
+                context_base=context_base,
+                valid_entities=valid_entities,
+                min_weight=min_weight,
+                max_weight=max_weight,
+            )
+            net_new_relations = []
+            for rel in gleaned_relations:
+                pair = tuple(sorted((rel["src_id"], rel["tgt_id"])))
+                if pair in existing_pairs:
+                    continue
+                existing_pairs.add(pair)
+                net_new_relations.append(rel)
+            if net_new_relations:
+                chunk_relationships.extend(net_new_relations)
+
+            if not net_new_entities and not net_new_relations:
+                break
+
+        for ent in chunk_entities:
+            maybe_nodes[ent["entity_name"]].append(ent)
+        for rel in chunk_relationships:
+            maybe_edges[tuple(sorted((rel["src_id"], rel["tgt_id"])))].append(rel)
+
+    logger.info(
+        f"Extracted {len(maybe_nodes)} unique entities and {len(maybe_edges)} unique relationships."
+    )
+
     all_entities_data = await asyncio.gather(
         *[
             _merge_nodes_then_upsert(k, v, knowledge_graph_inst, global_config)
@@ -398,7 +555,7 @@ async def extract_entities(chunks: dict[str, TextChunkSchema], knowledge_graph_i
             for dp in all_entities_data
         }
         await entity_vdb.upsert(data_for_vdb)
-        
+
     return knowledge_graph_inst, all_entities_data, all_edges_data
 
 

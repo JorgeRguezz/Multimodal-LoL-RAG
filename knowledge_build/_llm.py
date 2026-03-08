@@ -12,6 +12,8 @@ from ._utils import compute_args_hash, wrap_embedding_func_with_attrs
 from .base import BaseKVStorage
 from ._utils import EmbeddingFunc
 
+import re
+
 # GPT-OSS-20B (GGUF) via llama-cpp-python
 from huggingface_hub import snapshot_download
 from llama_cpp import Llama
@@ -65,13 +67,15 @@ class LLMConfig:
 global_local_llm = None
 global_local_embedding_model = None
 global_oss_llm = None
+FINAL_MARKER_PATTERN = re.compile(r"final<\|message\|>")
+FINAL_CHANNEL_MARKER = "<|start|>assistant<|channel|>final<|message|>"
 
 # GPT-OSS-20B config (mirrors playground/test_gpt_oss_20b.py)
 OSS_MODEL_ID = "unsloth/gpt-oss-20b-GGUF"
-OSS_QUANT_FILE = "gpt-oss-20b-Q4_K_M.gguf"
-OSS_LOCAL_DIR = "./gpt-oss-20b"
+OSS_QUANT_FILE = "gpt-oss-20b-F16.gguf"
+OSS_LOCAL_DIR = "/home/gatv-projects/Desktop/project/gpt-oss-20b"
 OSS_N_GPU_LAYERS = -1
-OSS_N_CTX = 20000
+OSS_N_CTX = 16384
 OSS_N_BATCH = 512
 OSS_F16_KV = True
 
@@ -120,6 +124,84 @@ def get_oss_llm_instance():
             verbose=False,
         )
     return global_oss_llm
+
+
+def _format_chat_prompt(system_prompt: str | None, user_prompt: str, history_messages: list[dict]) -> str:
+    parts = []
+    if system_prompt:
+        parts.append(f"<|start|>system<|message|>{system_prompt}<|end|>")
+    for msg in history_messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        parts.append(f"<|start|>{role}<|message|>{content}<|end|>")
+    parts.append(f"<|start|>user<|message|>{user_prompt}<|end|>")
+    return "".join(parts)
+
+
+def _split_thought_and_answer(raw_text: str) -> tuple[str, str, bool]:
+    clean_output = (raw_text or "").strip()
+    if not clean_output:
+        return "", "", False
+
+    if FINAL_CHANNEL_MARKER in clean_output:
+        idx = clean_output.rfind(FINAL_CHANNEL_MARKER)
+        thought_process = clean_output[:idx].strip()
+        answer = clean_output[idx + len(FINAL_CHANNEL_MARKER):].strip()
+        answer = answer.replace("<|end|>", "").strip()
+        return thought_process, answer, True
+
+    matches = list(FINAL_MARKER_PATTERN.finditer(clean_output))
+    if matches:
+        last = matches[-1]
+        thought_process = clean_output[: last.start()].strip()
+        answer = clean_output[last.end() :].strip()
+        answer = answer.replace("<|end|>", "").strip()
+        return thought_process, answer, True
+
+    answer = clean_output
+    for marker in (
+        "<|start|>assistant<|channel|>analysis<|message|>",
+        "<|start|>assistant<|message|>",
+    ):
+        if marker in answer:
+            answer = answer.split(marker, maxsplit=1)[-1].strip()
+    answer = answer.replace("<|end|>", "").strip()
+    return "", answer, False
+
+
+def _trim_to_extraction_payload(text: str) -> str:
+    if not text:
+        return text
+    starts = []
+    for marker in ('("entity"', '("relationship"', "<|COMPLETE|>"):
+        pos = text.find(marker)
+        if pos != -1:
+            starts.append(pos)
+    if not starts:
+        return text.strip()
+    return text[min(starts):].strip()
+
+
+def _truncate_on_repetition(text: str, window: int = 30, repeat_threshold: int = 3) -> str:
+    if not text:
+        return text
+    tokens = text.split()
+    if len(tokens) < window * (repeat_threshold + 1):
+        return text
+
+    repeat_count = 1
+    for i in range(window, len(tokens), window):
+        prev = tokens[i - window : i]
+        cur = tokens[i : i + window]
+        if len(cur) < window:
+            break
+        if cur == prev:
+            repeat_count += 1
+            if repeat_count >= repeat_threshold:
+                return " ".join(tokens[:i]).strip()
+        else:
+            repeat_count = 1
+    return text
 
 async def local_llm_complete_if_cache(
     model_path, prompt, system_prompt=None, history_messages=[], **kwargs
@@ -191,10 +273,7 @@ async def oss_llm_complete(model_name, prompt, system_prompt=None, history_messa
         if if_cache_return is not None and if_cache_return["return"] is not None:
             return if_cache_return["return"]
 
-    full_prompt = ""
-    if system_prompt:
-        full_prompt += f"<s><|begin_system|>\n{system_prompt}\n"
-    full_prompt += "<|begin_user|>\n" + prompt + "\n<|begin_assistant|>\n"
+    full_prompt = _format_chat_prompt(system_prompt, prompt, history_messages)
 
     llm = get_oss_llm_instance()
     loop = asyncio.get_running_loop()
@@ -202,12 +281,17 @@ async def oss_llm_complete(model_name, prompt, system_prompt=None, history_messa
     def generate():
         output = llm(
             full_prompt,
-            max_tokens=kwargs.get("max_tokens", 10000),
-            temperature=kwargs.get("temperature", 0.7),
-            top_p=kwargs.get("top_p", 0.9),
-            stop=kwargs.get("stop", ["User:"]),
+            max_tokens=kwargs.get("max_tokens", 3500),
+            temperature=kwargs.get("temperature", 0.1),
+            top_p=kwargs.get("top_p", 1.0),
+            top_k=kwargs.get("top_k", 0),
+            repeat_penalty=kwargs.get("repeat_penalty", 1.12),
         )
-        return output["choices"][0]["text"].strip()
+        raw_text = output["choices"][0]["text"]
+        _, answer, _ = _split_thought_and_answer(raw_text)
+        cleaned = _trim_to_extraction_payload(answer)
+        cleaned = _truncate_on_repetition(cleaned)
+        return cleaned
 
     response_text = await loop.run_in_executor(None, generate)
 
@@ -239,9 +323,9 @@ local_llm_config = LLMConfig(
     embedding_func_max_async = 4,
     query_better_than_threshold = 0.2,
 
-    best_model_func_raw = local_llm_complete,
-    best_model_name = "/home/gatv-projects/Desktop/project/llama-3.2-3B-Instruct", 
-    best_model_max_token_size = 4096, # Adjust to your model's context window
+    best_model_func_raw = oss_llm_complete,
+    best_model_name = OSS_MODEL_ID,
+    best_model_max_token_size = OSS_N_CTX,
     best_model_max_async  = 1,
     
     cheap_model_func_raw = oss_llm_complete,
@@ -272,30 +356,29 @@ async def local_llm_batch_generate(model_path: str, prompts: list[str]) -> list[
     
     return response_texts
 
-async def oss_llm_batch_generate(prompts: list[str]) -> list[str]:
+async def oss_llm_batch_generate(
+    prompts: list[str],
+    system_prompt: str | None = None,
+    max_tokens: int = 3000,
+) -> list[str]:
     llm = get_oss_llm_instance()
     loop = asyncio.get_running_loop()
 
     def generate_one(prompt: str) -> str:
-
-        system_prompt = ""
-
-        full_prompt = (
-            "<|start|>system<|message|>\n"
-            f"{system_prompt}\n"
-            "<|end|><|start|>user<|message|>\n"
-            f"{prompt}\n"
-            "<|end|><|start|>assistant<|message|>\n"
-        )
+        full_prompt = _format_chat_prompt(system_prompt, prompt, [])
         output = llm(
             full_prompt,
-            max_tokens=10000,
-            temperature=1.0,
+            max_tokens=max_tokens,
+            temperature=0.1,
             top_p=1.0,
-            top_k=0
-            # stop=["User:"],
+            top_k=0,
+            repeat_penalty=1.12,
         )
-        return output["choices"][0]["text"].strip()
+        raw_text = output["choices"][0]["text"]
+        _, answer, _ = _split_thought_and_answer(raw_text)
+        cleaned = _trim_to_extraction_payload(answer)
+        cleaned = _truncate_on_repetition(cleaned)
+        return cleaned
 
     async def run_batch():
         results = []

@@ -1,0 +1,8 @@
+networkx
+numpy
+nano-vectordb
+sentence-transformers
+torch
+vllm
+llama-cpp-python
+huggingface-hub

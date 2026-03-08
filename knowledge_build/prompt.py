@@ -6,6 +6,61 @@ Reference:
 GRAPH_FIELD_SEP = "<SEP>"
 PROMPTS = {}
 
+PROMPTS["system_prompt_kg_glean_unified"] = """You are doing a unified delta extraction pass over a chunk-level graph.
+Return only NEW missing tuples (entities and/or relationships) in the exact requested format.
+If nothing new is found, return only the completion delimiter.
+
+Reasoning: High
+
+<|channel|>analysis<|message|>[user request]. Provide answer.<|end|>
+<|start|>assistant<|channel|>final<|message|>[your response]<|return|>
+"""
+
+PROMPTS["system_prompt_kg_summary"] = """You merge multiple descriptions into one concise, coherent description.
+Preserve factual content, resolve contradictions conservatively, and avoid unsupported claims.
+
+Reasoning: Medium
+
+<|channel|>analysis<|message|>[user request]. Provide answer.<|end|>
+<|start|>assistant<|channel|>final<|message|>[your response]<|return|>
+"""
+
+PROMPTS["kg_simple_graph_extraction_template"] = """
+You are extracting a chunk-level graph for a knowledge graph from game-related text.
+Extract entities and relationships together.
+
+Allowed entity types:
+[{entity_types}]
+
+Output format only:
+("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_strength>)
+Use {record_delimiter} between records and end with {completion_delimiter}.
+Text:
+{input_text}
+Output:
+"""
+
+PROMPTS["kg_unified_glean_template"] = """Review the current chunk-level graph and add ONLY missing tuples.
+You may output both entity and relationship tuples in the required format.
+
+Allowed entity types: [{entity_types}]
+Current entities:
+{entity_snapshot}
+
+Current relationships:
+{relation_snapshot}
+
+Chunk text:
+{chunk_text}
+
+Output format:
+("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_strength>)
+Use {record_delimiter} between records and end with {completion_delimiter}.
+If nothing new is missing, output only {completion_delimiter}.
+"""
+
 PROMPTS[
     "entity_extraction"
 ] = """-Goal-

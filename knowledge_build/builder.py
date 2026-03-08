@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import asyncio
+import networkx as nx
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Type, Dict, Optional, Callable, List, Union
@@ -23,6 +24,7 @@ from knowledge_build.base import BaseKVStorage, BaseVectorStorage, BaseGraphStor
 from knowledge_build._utils import limit_async_func_call, wrap_embedding_func_with_attrs, load_json, logger
 from knowledge_build._op import chunking_by_video_segments, extract_entities, get_chunks
 from knowledge_build._llm import LLMConfig, local_llm_config
+from knowledge_build.clean_kg import load_graphml, save_graphml, unify_entities_conservative
 
 
 @dataclass
@@ -65,6 +67,9 @@ class KnowledgeBuilder:
     video_segment_feature_vdb: BaseVectorStorage = field(init=False, repr=False, default=None)
     artifact_dir: str = field(init=False)
     source_video_name: str = field(init=False)
+    global_cache_dir: str = field(init=False)
+    global_graph_name: str = field(default="graph_AetherNexus.graphml")
+    global_manifest_name: str = field(default="aether_manifest.json")
 
     def __post_init__(self):
         self.artifact_dir = self._resolve_artifact_dir()
@@ -73,6 +78,8 @@ class KnowledgeBuilder:
             self._project_root(), f"knowledge_build_cache_{self.source_video_name}"
         )
         os.makedirs(self.working_dir, exist_ok=True)
+        self.global_cache_dir = os.path.join(self._project_root(), "knowledge_build_cache_global")
+        os.makedirs(self.global_cache_dir, exist_ok=True)
 
         self.embedding_func = limit_async_func_call(self.llm.embedding_func_max_async)(
             wrap_embedding_func_with_attrs(
@@ -130,8 +137,8 @@ class KnowledgeBuilder:
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def _resolve_artifact_dir(self) -> str:
-        # Required layout: extraction_dir/extracted_data/<video_name>/kv_store_*.json
-        extracted_data_root = os.path.join(self.extraction_dir, "extracted_data")
+        # Required layout: extraction_dir/sanitized_extracted_data/<video_name>/kv_store_*.json
+        extracted_data_root = os.path.join(self.extraction_dir, "sanitized_extracted_data")
         if not os.path.isdir(extracted_data_root):
             raise FileNotFoundError(
                 f"Could not find extraction artifacts directory: {extracted_data_root}"
@@ -167,12 +174,12 @@ class KnowledgeBuilder:
 
         if not unbuilt_dirs:
             raise FileNotFoundError(
-                "No unbuilt extraction folders found. All extracted_data folders already have matching knowledge_build_cache_<video_name> outputs."
+                "No unbuilt extraction folders found. All sanitized_extracted_data folders already have matching knowledge_build_cache_<video_name> outputs."
             )
 
         if len(candidate_dirs) > 1:
             logger.warning(
-                f"Multiple extracted_data folders found; selected next unbuilt folder: {os.path.basename(unbuilt_dirs[0])}"
+                f"Multiple sanitized_extracted_data folders found; selected next unbuilt folder: {os.path.basename(unbuilt_dirs[0])}"
             )
         return unbuilt_dirs[0]
 
@@ -208,6 +215,7 @@ class KnowledgeBuilder:
             await self.video_path_db.upsert(paths_data)
 
         await self.ainsert(self.video_segments._data)
+        self._post_clean_graphs_and_update_global()
 
     async def ainsert(self, new_video_segment: Dict):
         await self._insert_start()
@@ -278,11 +286,81 @@ class KnowledgeBuilder:
             tasks.append(((storage_inst)).index_done_callback())
         await asyncio.gather(*tasks)
 
+    def _post_clean_graphs_and_update_global(self) -> None:
+        graph_path = os.path.join(self.working_dir, "graph_chunk_entity_relation.graphml")
+        cleaned_graph_path = os.path.join(self.working_dir, "graph_chunk_entity_relation_clean.graphml")
+
+        if not os.path.exists(graph_path):
+            logger.warning(f"Skipping KG post-cleaning, graph not found: {graph_path}")
+            return
+
+        logger.info("Running post-cleaning on per-video knowledge graph...")
+        graph = load_graphml(graph_path)
+        cleaned = unify_entities_conservative(graph)
+        save_graphml(cleaned, cleaned_graph_path)
+        logger.info(
+            f"Per-video graph cleaned: nodes {graph.number_of_nodes()} -> {cleaned.number_of_nodes()}, "
+            f"edges {graph.number_of_edges()} -> {cleaned.number_of_edges()}"
+        )
+
+        try:
+            self._update_global_knowledge_graph(cleaned_graph_path)
+        except Exception as exc:
+            logger.warning(f"Global knowledge graph update failed: {exc}")
+
+    def _update_global_knowledge_graph(self, cleaned_graph_path: str) -> None:
+        manifest_path = os.path.join(self.global_cache_dir, self.global_manifest_name)
+        global_graph_path = os.path.join(self.global_cache_dir, self.global_graph_name)
+        source_id = self.source_video_name
+
+        processed = self._load_global_manifest(manifest_path)
+        if source_id in processed:
+            logger.info(f"Global graph already includes '{source_id}', skipping merge.")
+            return
+
+        incoming_graph = load_graphml(cleaned_graph_path)
+        if not os.path.exists(global_graph_path):
+            save_graphml(incoming_graph, global_graph_path)
+            logger.info(f"Initialized global knowledge graph: {global_graph_path}")
+        else:
+            global_graph = load_graphml(global_graph_path)
+            merged = nx.compose(nx.MultiGraph(global_graph), nx.MultiGraph(incoming_graph))
+            merged_clean = unify_entities_conservative(merged)
+            save_graphml(merged_clean, global_graph_path)
+            logger.info(
+                f"Updated global graph: nodes {global_graph.number_of_nodes()} -> {merged_clean.number_of_nodes()}, "
+                f"edges {global_graph.number_of_edges()} -> {merged_clean.number_of_edges()}"
+            )
+
+        processed.append(source_id)
+        self._save_global_manifest(manifest_path, processed)
+
+    def _load_global_manifest(self, manifest_path: str) -> list[str]:
+        if not os.path.exists(manifest_path):
+            return []
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                items = data.get("processed_videos", [])
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
+            return [str(x) for x in items]
+        except Exception:
+            return []
+
+    def _save_global_manifest(self, manifest_path: str, processed: list[str]) -> None:
+        payload = {"processed_videos": sorted(set(processed))}
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+
 
 def _default_extraction_dir() -> str:
     return os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "knowledge_extraction",
+        "knowledge_sanitization",
         "cache",
     )
 
