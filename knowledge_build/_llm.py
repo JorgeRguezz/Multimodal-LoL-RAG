@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.distributed
+import gc
 from dataclasses import asdict, dataclass, field
 
 import os
@@ -419,3 +420,51 @@ def shutdown_local_llm():
         print("Local LLM resources have been released.")
     else:
         print("No local LLM instance to shut down.")
+
+
+def shutdown_oss_llm():
+    """
+    Shuts down the global llama.cpp GPT-OSS instance and frees related resources.
+    """
+    global global_oss_llm
+    if global_oss_llm is not None:
+        print("Attempting to shut down GPT-OSS llama.cpp instance...")
+        try:
+            if hasattr(global_oss_llm, "close"):
+                global_oss_llm.close()
+        except Exception as exc:
+            print(f"Warning: failed to close GPT-OSS instance cleanly: {exc}")
+        global_oss_llm = None
+        print("GPT-OSS resources have been released.")
+    else:
+        print("No GPT-OSS instance to shut down.")
+
+
+def shutdown_embedding_model():
+    """
+    Releases the global sentence-transformers embedding model instance.
+    """
+    global global_local_embedding_model
+    if global_local_embedding_model is not None:
+        print("Releasing embedding model instance...")
+        global_local_embedding_model = None
+    else:
+        print("No embedding model instance to release.")
+
+
+def shutdown_all_llm_resources():
+    """
+    Best-effort release of all LLM/embedding resources and CUDA cache.
+    """
+    shutdown_local_llm()
+    shutdown_oss_llm()
+    shutdown_embedding_model()
+
+    try:
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    except Exception as exc:
+        print(f"Warning: cleanup encountered an error: {exc}")

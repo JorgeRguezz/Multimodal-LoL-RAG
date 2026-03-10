@@ -21,7 +21,7 @@ sys.path.append(project_root)
 sys.path.append(os.path.join(project_root, "playground"))
 
 from knowledge_extraction.config import *
-from knowledge_graph_build._videoutil.split import split_video
+from knowledge_build._videoutil.split import split_video
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client

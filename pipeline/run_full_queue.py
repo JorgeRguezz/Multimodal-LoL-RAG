@@ -201,6 +201,18 @@ def _write_summary_report(summary: dict[str, Any]) -> Path:
     return out_path
 
 
+def _cleanup_in_process_vram() -> None:
+    """
+    Best-effort cleanup between queue items so next video starts with fresh VRAM.
+    """
+    try:
+        from knowledge_build._llm import shutdown_all_llm_resources  # noqa: WPS433
+
+        shutdown_all_llm_resources()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[cleanup] Warning: could not run LLM cleanup: {exc}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run full extraction->sanitize->build->sanitize queue.")
     parser.add_argument("--downloads-dir", default=str(DOWNLOADS_QUEUE_DIR))
@@ -258,10 +270,12 @@ def main() -> int:
         if result["result"] == "failed":
             failures += 1
             print(f"FAILED: {video.name}: {result['error']}")
+            _cleanup_in_process_vram()
             if not args.continue_on_error:
                 break
         else:
             print(f"SUCCESS: {video.name}")
+            _cleanup_in_process_vram()
 
     report_path = _write_summary_report(summary)
     print("\nSummary report:", report_path)
