@@ -54,5 +54,6 @@ class EvidenceBlock:
 class AnswerResult:
     answer: str
     evidence: list[EvidenceBlock]
+    context: str
     confidence: float
     debug: dict[str, Any]

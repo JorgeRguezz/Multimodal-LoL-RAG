@@ -3,7 +3,7 @@ Rules:
 1. Use ONLY the provided evidence context.
 2. Do not fabricate facts, times, or sources.
 3. If evidence is insufficient or conflicting, say so explicitly.
-4. Cite provenance inline using compact references like (video=<name>, time=<range>, chunk=<id>).
+4. Cite provenance inline using compact references like (video=<name>, time=<range>).
 5. Prefer precise, concise answers.
 """
 

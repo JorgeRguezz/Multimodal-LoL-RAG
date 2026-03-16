@@ -7,9 +7,8 @@ import uuid
 
 import networkx as nx
 
-from knowledge_build._utils import always_get_an_event_loop
-
 from . import config
+from .answer_postprocess import inject_video_urls, load_video_url_registry
 from .context_builder import make_evidence_blocks, render_context_for_prompt
 from .generator import generate_answer
 from .query_analyzer import analyze_query
@@ -22,10 +21,20 @@ from .verifier import verify_answer
 logger = logging.getLogger(config.LOGGER_NAME)
 
 
+def _always_get_an_event_loop() -> asyncio.AbstractEventLoop:
+    try:
+        return asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
 class InferenceService:
     def __init__(self) -> None:
         self.stores: dict[str, VideoStore] = {}
         self.global_graph: nx.Graph | None = None
+        self.video_url_registry = load_video_url_registry(config.VIDEO_METADATA_REGISTRY)
         self._initialized = False
 
     def initialize(self) -> None:
@@ -36,7 +45,7 @@ class InferenceService:
 
     def answer(self, query: str, debug: bool = False) -> AnswerResult:
         self.initialize()
-        loop = always_get_an_event_loop()
+        loop = _always_get_an_event_loop()
         return loop.run_until_complete(self._answer_async(query=query, debug=debug))
 
     async def _answer_async(self, query: str, debug: bool = False) -> AnswerResult:
@@ -86,7 +95,13 @@ class InferenceService:
                 "verification": {"supported_ratio": 0.0, "reason": "insufficient_evidence"},
             }
             self._log_query(query_id, hits, evidence, timings, debug_payload["verification"])
-            return AnswerResult(answer=answer_text, evidence=evidence, confidence=0.2, debug=debug_payload if debug else {})
+            return AnswerResult(
+                answer=answer_text,
+                evidence=evidence,
+                context=context,
+                confidence=0.2,
+                debug=debug_payload if debug else {},
+            )
 
         t4 = time.perf_counter()
         generated = await generate_answer(query=query, context=context)
@@ -110,6 +125,8 @@ class InferenceService:
                 + verified_answer
             ).strip()
 
+        verified_answer = inject_video_urls(verified_answer, self.video_url_registry)
+
         timings["total_s"] = sum(timings.values())
         debug_payload = {
             "query_id": query_id,
@@ -126,6 +143,7 @@ class InferenceService:
         return AnswerResult(
             answer=verified_answer,
             evidence=evidence,
+            context=context,
             confidence=confidence,
             debug=debug_payload if debug else {},
         )

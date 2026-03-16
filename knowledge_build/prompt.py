@@ -1,6 +1,6 @@
 """
 Reference:
- - Prompts are from [graphrag](https://github.com/microsoft/graphrag)
+ - Prompts are versions of the ones used in [graphrag](https://github.com/microsoft/graphrag)
 """
 
 GRAPH_FIELD_SEP = "<SEP>"

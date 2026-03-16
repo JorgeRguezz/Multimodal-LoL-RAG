@@ -17,6 +17,9 @@ SANITIZED_GLOBAL_GRAPH = SANITIZED_CACHE_ROOT / "sanitized_global" / "graph_Aeth
 # Global manifest for processed videos.
 SANITIZED_GLOBAL_MANIFEST = SANITIZED_CACHE_ROOT / "sanitized_global" / "aether_manifest.json"
 
+# Optional per-video metadata registry used for final answer formatting.
+VIDEO_METADATA_REGISTRY = PROJECT_ROOT / "knowledge_inference" / "video_metadata.json"
+
 # Dense retrieval depth over chunk embeddings.
 TOP_K_CHUNKS_DENSE = 30
 
