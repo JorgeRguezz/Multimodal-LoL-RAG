@@ -1,0 +1,98 @@
+# Ignorar modelos
+models/
+
+#Ignorar llamas 3.2 en raiz
+llama-3.2-3B-Instruct/
+
+# Ignorar videos descargados
+downloads/
+
+# Ignorar .env
+.env
+
+# Ignorar __pycache__
+__pycache__/
+*.pyc
+
+# Ignorar virtual environment
+.venv/
+venv/
+venv_*
+venv_*/
+
+knowledge_extraction/cache/
+knowledge_sanitization/cache/
+knowledge_build_cache_*/
+knowledge_build_cache_global/
+
+# Ignorar VideoRAG
+VideoRAG
+videorag_cache*
+
+#ImageBind
+ImageBind
+
+#Gemini
+# GEMINI.md@gem
+
+# Ignore knowledge graph build outputs
+playground/knowledge_graph_build/lib**
+playground/knowledge_graph_build/graph_legend.html
+_cache
+server_cache_*
+test_data_build_cache_*
+knowledge_build_cache_*
+
+cookies.txt
+error.txt
+
+lol_test_cache
+
+.checkpoints
+.cache/
+huggingface_cache/
+models/
+# sam3/
+# dinov2/
+*.gguf
+# *.md
+*.sh
+frame_*.png
+*.mp4
+
+=0.46.1
+=4.45.0
+
+/knowledge_extraction/image_matching/assets/*
+
+*.safetensors
+
+/playground/qwen2.5-vl-7b
+
+/knowledge_extraction/cache/*
+
+vlm_context_test_cache
+
+qa_datasets/
+
+kv_store_*
+
+# vdb_*
+
+*.graphml
+
+full_pipeline_queue_*
+
+test_inference_10q_*
+
+post_build/
+pre_build/
+
+report_eval_test_*
+
+aether_manifest.json
+
+~/Desktop/project/playground/gpt-oss-20b/README.md
+
+sam3
+

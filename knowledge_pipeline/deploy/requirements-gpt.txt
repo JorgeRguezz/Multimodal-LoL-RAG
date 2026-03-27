@@ -1,0 +1,15 @@
+# Minimal runtime for knowledge_extraction/segment_summarization_server.py
+# Used by extractor via: venv_gpt/bin/python3 -m knowledge_extraction.segment_summarization_server
+
+# LLM runtime
+llama_cpp_python==0.3.16
+
+# Model download helper
+huggingface-hub==0.36.0
+
+# MCP stdio server framework
+mcp==1.26.0
+
+# PyTorch for CUDA runtime libs path + availability checks in server
+# (kept pinned to your requested version)
+torch==2.10.0

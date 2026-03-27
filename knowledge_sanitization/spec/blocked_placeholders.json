@@ -1,0 +1,12 @@
+[
+  "<ENTITY_NAME>",
+  "<ENTITY_TYPE>",
+  "<entity_description>",
+  "<ENTITY_DESCRIPTION>",
+  "<ENTITY>",
+  "<RELATIONSHIP>",
+  "<|assistant|>",
+  "<|analysis|>",
+  "<|message|>",
+  "<|channel|>"
+]
