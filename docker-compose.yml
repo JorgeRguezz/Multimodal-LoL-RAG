@@ -1,0 +1,26 @@
+services:
+  inference:
+    image: jorgerguezz/lol-rag-inference:latest
+    build: 
+      context: .
+      dockerfile: docker/inference/Dockerfile
+    container_name: gatv_inference
+    working_dir: /app
+    environment:
+      PYTHONHASHSEED: "0"
+      SANITIZED_CACHE_ROOT: /app/runtime_data/sanitized_cache
+      SANITIZED_BUILD_GLOB: sanitized_build_cache_*
+      SANITIZED_GLOBAL_ROOT: /app/runtime_data/sanitized_cache/sanitized_global
+      SANITIZED_GLOBAL_GRAPH: /app/runtime_data/sanitized_cache/sanitized_global/graph_AetherNexus.graphml
+      SANITIZED_GLOBAL_MANIFEST: /app/runtime_data/sanitized_cache/sanitized_global/aether_manifest.json
+      VIDEO_METADATA_REGISTRY: /app/knowledge_inference/video_metadata.json
+      OSS_LOCAL_DIR: /app/models/gpt-oss-20b
+    volumes:
+      - ./runtime_data:/app/runtime_data
+      - ./models:/app/models
+    ports:
+      - "3000:3000"
+      - "8000:8000"
+    gpus: all
+    stdin_open: true
+    tty: true

@@ -72,7 +72,8 @@ _final_channel_marker = "<|start|>assistant<|channel|>final<|message|>"
 # GPT-OSS-20B config used by both build and inference.
 OSS_MODEL_ID = "unsloth/gpt-oss-20b-GGUF"
 OSS_QUANT_FILE = "gpt-oss-20b-F16.gguf"
-OSS_LOCAL_DIR = str(Path(__file__).resolve().parents[1] / "gpt-oss-20b")
+_DEFAULT_OSS_LOCAL_DIR = str(Path(__file__).resolve().parents[1] / "gpt-oss-20b")
+OSS_LOCAL_DIR = os.getenv("OSS_LOCAL_DIR", _DEFAULT_OSS_LOCAL_DIR)
 OSS_N_GPU_LAYERS = -1
 OSS_N_CTX = 16384
 OSS_N_BATCH = 512

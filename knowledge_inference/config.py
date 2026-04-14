@@ -1,24 +1,52 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Project root inferred from package location. Keeps all path handling absolute.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+# Default local sanitized cache root.
+_DEFAULT_SANITIZED_CACHE_ROOT = PROJECT_ROOT / "knowledge_sanitization" / "cache"
+
 # Sanitized cache root enforced for all inference reads.
-SANITIZED_CACHE_ROOT = PROJECT_ROOT / "knowledge_sanitization" / "cache"
+SANITIZED_CACHE_ROOT = Path(
+    os.getenv("SANITIZED_CACHE_ROOT", str(_DEFAULT_SANITIZED_CACHE_ROOT))
+).resolve()
 
 # Per-video cache naming convention used by sanitization stage.
-SANITIZED_BUILD_GLOB = "sanitized_build_cache_*"
+SANITIZED_BUILD_GLOB = os.getenv("SANITIZED_BUILD_GLOB", "sanitized_build_cache_*")
+
+# Default global sanitized folder.
+_DEFAULT_SANITIZED_GLOBAL_ROOT = SANITIZED_CACHE_ROOT / "sanitized_global"
+
+SANITIZED_GLOBAL_ROOT = Path(
+    os.getenv("SANITIZED_GLOBAL_ROOT", str(_DEFAULT_SANITIZED_GLOBAL_ROOT))
+).resolve()
 
 # Global graph emitted by sanitization/global merge.
-SANITIZED_GLOBAL_GRAPH = SANITIZED_CACHE_ROOT / "sanitized_global" / "graph_AetherNexus.graphml"
+SANITIZED_GLOBAL_GRAPH = Path(
+    os.getenv(
+        "SANITIZED_GLOBAL_GRAPH",
+        str(SANITIZED_GLOBAL_ROOT / "graph_AetherNexus.graphml"),
+    )
+).resolve()
 
 # Global manifest for processed videos.
-SANITIZED_GLOBAL_MANIFEST = SANITIZED_CACHE_ROOT / "sanitized_global" / "aether_manifest.json"
+SANITIZED_GLOBAL_MANIFEST = Path(
+    os.getenv(
+        "SANITIZED_GLOBAL_MANIFEST",
+        str(SANITIZED_GLOBAL_ROOT / "aether_manifest.json"),
+    )
+).resolve()
 
 # Optional per-video metadata registry used for final answer formatting.
-VIDEO_METADATA_REGISTRY = PROJECT_ROOT / "knowledge_inference" / "video_metadata.json"
+VIDEO_METADATA_REGISTRY = Path(
+    os.getenv(
+        "VIDEO_METADATA_REGISTRY",
+        str(PROJECT_ROOT / "knowledge_inference" / "video_metadata.json"),
+    )
+).resolve()
 
 # Dense retrieval depth over chunk embeddings.
 TOP_K_CHUNKS_DENSE = 30

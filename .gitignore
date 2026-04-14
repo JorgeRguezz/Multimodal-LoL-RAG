@@ -24,6 +24,7 @@ knowledge_extraction/cache/
 knowledge_sanitization/cache/
 knowledge_build_cache_*/
 knowledge_build_cache_global/
+runtime_data/sanitized_cache/
 
 # Ignorar VideoRAG
 VideoRAG

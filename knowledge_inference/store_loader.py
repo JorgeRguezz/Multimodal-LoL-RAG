@@ -23,15 +23,20 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _assert_sanitized_path(path: Path) -> None:
     resolved = path.resolve()
-    if config.SANITIZED_CACHE_ROOT.resolve() not in resolved.parents and resolved != config.SANITIZED_CACHE_ROOT.resolve():
+    allowed_root = config.SANITIZED_CACHE_ROOT.resolve()
+
+    if resolved != allowed_root and allowed_root not in resolved.parents:
         raise ValueError(f"Refusing to read non-sanitized path: {resolved}")
 
 
 def discover_sanitized_video_dirs() -> list[Path]:
     root = config.SANITIZED_CACHE_ROOT
     _assert_sanitized_path(root)
+
     if not root.exists():
-        raise FileNotFoundError(f"Sanitized cache root not found: {root}")
+        logger.warning("Sanitized cache root not found: %s", root)
+        return []
+
     dirs = [p for p in root.glob(config.SANITIZED_BUILD_GLOB) if p.is_dir()]
     return sorted(dirs)
 
@@ -141,22 +146,37 @@ def load_video_store(video_dir: Path) -> VideoStore:
 
 def load_all_video_stores() -> dict[str, VideoStore]:
     stores: dict[str, VideoStore] = {}
+
     for video_dir in discover_sanitized_video_dirs():
         try:
             store = load_video_store(video_dir)
             stores[store.video_name] = store
         except Exception as exc:
-            logger.warning("Skipping sanitized video dir '%s' due to load error: %s", video_dir, exc)
+            logger.warning(
+                "Skipping sanitized video dir '%s' due to load error: %s",
+                video_dir,
+                exc,
+            )
+
     if not stores:
-        raise RuntimeError("No valid sanitized video stores could be loaded.")
+        raise RuntimeError(
+            "No valid sanitized video stores could be loaded from "
+            f"{config.SANITIZED_CACHE_ROOT}"
+        )
+
     return stores
 
 
 def load_global_graph() -> nx.Graph:
     path = config.SANITIZED_GLOBAL_GRAPH
     _assert_sanitized_path(path)
+
     if not path.exists():
-        raise FileNotFoundError(f"Sanitized global graph not found: {path}")
+        raise FileNotFoundError(
+            f"Sanitized global graph not found: {path}. "
+            "Run the sanitization/build pipeline first or mount a valid sanitized dataset."
+        )
+
     return nx.read_graphml(path)
 
 

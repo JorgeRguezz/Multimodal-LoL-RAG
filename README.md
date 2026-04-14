@@ -199,6 +199,72 @@ source venv_smolvlm/bin/activate
 python -m knowledge_inference.cli --query "What happened around the first dragon fight?" --debug
 ```
 
+## Docker Deployment
+
+The repo includes a GPU-enabled Docker image that serves:
+
+- the FastAPI inference API on port `8000`
+- the Next.js frontend on port `3000`
+
+The image expects two host-mounted directories at runtime:
+
+- `./runtime_data` mounted to `/app/runtime_data`
+- `./models` mounted to `/app/models`
+
+The GGUF model file must exist at:
+
+- `./models/gpt-oss-20b/gpt-oss-20b-F16.gguf`
+
+The sanitized caches used by inference must exist under:
+
+- `./runtime_data/sanitized_cache/`
+
+### Build With Docker Compose
+
+```bash
+docker compose build inference
+docker compose up inference
+```
+
+Then open:
+
+- frontend: `http://localhost:3000`
+- API: `http://localhost:8000`
+
+### Build and Tag for Docker Hub
+
+```bash
+docker build -f docker/inference/Dockerfile \
+  -t <dockerhub-user>/lol-rag-inference:latest \
+  -t <dockerhub-user>/lol-rag-inference:0.1.0 \
+  .
+```
+
+Push both tags:
+
+```bash
+docker push <dockerhub-user>/lol-rag-inference:latest
+docker push <dockerhub-user>/lol-rag-inference:0.1.0
+```
+
+### Run the Docker Hub Image
+
+```bash
+docker run --gpus all \
+  -p 3000:3000 \
+  -p 8000:8000 \
+  -v $(pwd)/runtime_data:/app/runtime_data \
+  -v $(pwd)/models:/app/models \
+  <dockerhub-user>/lol-rag-inference:latest
+```
+
+Important notes:
+
+- this image requires an NVIDIA GPU with Docker GPU support enabled
+- the frontend currently sends requests to `http://localhost:8000/chat`
+- if you change ports or hosts, update `knowledge_frontend/app/page.tsx` or add a proxy
+- `knowledge_api_server/main.py` currently allows CORS only for `http://localhost:3000`
+
 ## API Deployment
 
 `knowledge_api_server/` wraps `knowledge_inference.InferenceService` in FastAPI and exposes:
