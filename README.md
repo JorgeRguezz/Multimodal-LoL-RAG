@@ -206,18 +206,18 @@ The repo includes a GPU-enabled Docker image that serves:
 - the FastAPI inference API on port `8000`
 - the Next.js frontend on port `3000`
 
-The image expects two host-mounted directories at runtime:
+Mount the model directory at runtime:
 
-- `./runtime_data` mounted to `/app/runtime_data`
 - `./models` mounted to `/app/models`
 
 The GGUF model file must exist at:
 
 - `./models/gpt-oss-20b/gpt-oss-20b-F16.gguf`
 
-The sanitized caches used by inference must exist under:
+For sanitized caches, you have two options:
 
-- `./runtime_data/sanitized_cache/`
+- use the data already provided in the Docker image
+- use your own local data by mounting `./runtime_data` to `/app/runtime_data`
 
 ### Build With Docker Compose
 
@@ -248,6 +248,18 @@ docker push <dockerhub-user>/lol-rag-inference:0.1.0
 ```
 
 ### Run the Docker Hub Image
+
+If you want to use the data already included in the image:
+
+```bash
+docker run --gpus all \
+  -p 3000:3000 \
+  -p 8000:8000 \
+  -v $(pwd)/models:/app/models \
+  <dockerhub-user>/lol-rag-inference:latest
+```
+
+If you want to use your own local sanitized data:
 
 ```bash
 docker run --gpus all \
