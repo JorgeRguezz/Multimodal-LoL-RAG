@@ -219,7 +219,9 @@ For sanitized caches, you have two options:
 - use the data already provided in the Docker image
 - use your own local data by mounting `./runtime_data` to `/app/runtime_data`
 
-### Build With Docker Compose
+### Recommended: Run From This Repo With Docker Compose
+
+By default, Docker Compose uses the sanitized caches already baked into the image and mounts only the model directory.
 
 ```bash
 docker compose build inference
@@ -231,23 +233,29 @@ Then open:
 - frontend: `http://localhost:3000`
 - API: `http://localhost:8000`
 
-### Build and Tag for Docker Hub
+If you want Docker Compose to use your own local sanitized data instead, add this volume mount to `docker-compose.yml` under the `inference` service:
+
+```yaml
+- ./runtime_data:/app/runtime_data
+```
+
+### Docker Hub Image
 
 ```bash
 docker build -f docker/inference/Dockerfile \
-  -t <dockerhub-user>/lol-rag-inference:latest \
-  -t <dockerhub-user>/lol-rag-inference:0.1.0 \
+  -t jorgerguezz/lol-rag-inference:latest \
+  -t jorgerguezz/lol-rag-inference:0.1.0 \
   .
 ```
 
 Push both tags:
 
 ```bash
-docker push <dockerhub-user>/lol-rag-inference:latest
-docker push <dockerhub-user>/lol-rag-inference:0.1.0
+docker push jorgerguezz/lol-rag-inference:latest
+docker push jorgerguezz/lol-rag-inference:0.1.0
 ```
 
-### Run the Docker Hub Image
+### Alternative: Run Only From Docker Hub
 
 If you want to use the data already included in the image:
 
@@ -256,7 +264,7 @@ docker run --gpus all \
   -p 3000:3000 \
   -p 8000:8000 \
   -v $(pwd)/models:/app/models \
-  <dockerhub-user>/lol-rag-inference:latest
+  jorgerguezz/lol-rag-inference:latest
 ```
 
 If you want to use your own local sanitized data:
@@ -267,17 +275,19 @@ docker run --gpus all \
   -p 8000:8000 \
   -v $(pwd)/runtime_data:/app/runtime_data \
   -v $(pwd)/models:/app/models \
-  <dockerhub-user>/lol-rag-inference:latest
+  jorgerguezz/lol-rag-inference:latest
 ```
 
 Important notes:
 
 - this image requires an NVIDIA GPU with Docker GPU support enabled
+- if you mount `./runtime_data:/app/runtime_data`, your local data overrides the data baked into the image
 - the frontend currently sends requests to `http://localhost:8000/chat`
+- the Docker Hub image name is `jorgerguezz/lol-rag-inference:latest`
 - if you change ports or hosts, update `knowledge_frontend/app/page.tsx` or add a proxy
 - `knowledge_api_server/main.py` currently allows CORS only for `http://localhost:3000`
 
-## API Deployment
+## Local API Deployment
 
 `knowledge_api_server/` wraps `knowledge_inference.InferenceService` in FastAPI and exposes:
 
@@ -308,7 +318,7 @@ Current implementation details to be aware of:
 
 If you deploy the frontend and API on different hosts, update the CORS allowlist in `knowledge_api_server/main.py`.
 
-## Frontend Deployment
+## Local Frontend Deployment
 
 `knowledge_frontend/` is a Next.js app that sends chat requests to the API server.
 

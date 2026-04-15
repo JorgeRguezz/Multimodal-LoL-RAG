@@ -5,6 +5,13 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONHASHSEED=0
+ENV SANITIZED_CACHE_ROOT=/app/runtime_data/sanitized_cache
+ENV SANITIZED_BUILD_GLOB=sanitized_build_cache_*
+ENV SANITIZED_GLOBAL_ROOT=/app/runtime_data/sanitized_cache/sanitized_global
+ENV SANITIZED_GLOBAL_GRAPH=/app/runtime_data/sanitized_cache/sanitized_global/graph_AetherNexus.graphml
+ENV SANITIZED_GLOBAL_MANIFEST=/app/runtime_data/sanitized_cache/sanitized_global/aether_manifest.json
+ENV VIDEO_METADATA_REGISTRY=/app/knowledge_inference/video_metadata.json
+ENV OSS_LOCAL_DIR=/app/models/gpt-oss-20b
 
 # For llama-cpp-python CUDA support
 ENV CMAKE_ARGS="-DGGML_CUDA=on"
