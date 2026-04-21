@@ -7,7 +7,7 @@ services:
     container_name: gatv_inference
     working_dir: /app
     volumes:
-      - ./models:/app/models
+      - ./models:/app/models # Modificar ruta de tu modelo
     ports:
       - "3000:3000"
       - "8000:8000"
